@@ -1,8 +1,8 @@
 <idea-plugin>
-    <id>syncfiles</id>
+    <id>com.sammiler.syncfiles</id>
     <name>SyncFiles</name>
-    <version>1.0.0</version>
-    <vendor email="sammilergood@gmail.com" url="https://cplusplusbug.org">sammiller</vendor>
+    <version>1.0.4</version>
+    <vendor email="sammilergood@gmail.com" url="https://cplusplusbug.org">sammiler</vendor>
     <description>
         A CLion plugin to sync files and directories from GitHub repositories to your project.
     </description>
@@ -13,21 +13,10 @@
     <depends>com.intellij.modules.platform</depends>
 
     <extensions defaultExtensionNs="com.intellij">
-        <!-- 工具窗口 -->
         <toolWindow id="SyncFiles" secondary="true" anchor="right"
                     factoryClass="com.example.syncfiles.SyncFilesToolWindowFactory"/>
-        <!-- 设置页面 -->
         <projectConfigurable id="com.example.syncfiles.SyncFilesSettings"
                              displayName="SyncFiles Settings"
                              instance="com.example.syncfiles.SyncFilesSettingsConfigurable"/>
-        <!-- 配置服务 -->
     </extensions>
-
-    <actions>
-        <!-- 同步动作 -->
-        <action id="com.example.syncfiles.SyncAction" class="com.example.syncfiles.SyncAction"
-                text="Start Sync" description="Sync files and directories from GitHub">
-            <add-to-group group-id="ToolsMenu" anchor="last"/>
-        </action>
-    </actions>
 </idea-plugin>

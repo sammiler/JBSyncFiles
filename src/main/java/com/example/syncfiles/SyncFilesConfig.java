@@ -4,7 +4,6 @@ import com.intellij.openapi.components.*;
 import com.intellij.openapi.project.Project;
 import com.intellij.util.xmlb.XmlSerializerUtil;
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -21,7 +20,6 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
         return project.getService(SyncFilesConfig.class);
     }
 
-    @Nullable
     @Override
     public SyncFilesConfig getState() {
         return this;

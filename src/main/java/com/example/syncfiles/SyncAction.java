@@ -136,7 +136,7 @@ public class SyncAction extends AnAction {
         System.out.println("Fetching ZIP from: " + zipUrl);
 
         HttpClient client = HttpClient.newBuilder()
-                .followRedirects(HttpClient.Redirect.NORMAL) // 自动处理 301/302
+                .followRedirects(HttpClient.Redirect.NORMAL)
                 .build();
         HttpRequest request = HttpRequest.newBuilder().uri(URI.create(zipUrl)).build();
         HttpResponse<InputStream> response = client.send(request, HttpResponse.BodyHandlers.ofInputStream());
