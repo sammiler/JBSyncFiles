@@ -7,6 +7,7 @@ import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.progress.Task;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
+import com.intellij.openapi.application.ApplicationManager;
 import org.jetbrains.annotations.NotNull;
 
 import java.io.*;
@@ -79,9 +80,17 @@ public class SyncAction extends AnAction {
                             Messages.showWarningDialog("Unsupported URL format: " + mapping.sourceUrl, "Warning");
                         }
                     }
-                    Messages.showInfoMessage("Sync completed successfully!", "Success");
+
+                    // Ensure success message is shown on UI thread
+                    ApplicationManager.getApplication().invokeLater(() -> {
+                        Messages.showInfoMessage("Sync completed successfully!", "Success");
+                    });
+
                 } catch (Exception ex) {
-                    Messages.showErrorDialog("Sync failed: " + ex.getMessage(), "Error");
+                    // Ensure error message is shown on UI thread
+                    ApplicationManager.getApplication().invokeLater(() -> {
+                        Messages.showErrorDialog("Sync failed: " + ex.getMessage(), "Error");
+                    });
                     ex.printStackTrace();
                 }
             }
@@ -200,6 +209,7 @@ public class SyncAction extends AnAction {
 
         System.out.println("Directory synced to: " + targetPath);
     }
+
     private void unzip(Path zipPath, Path extractPath) throws IOException {
         System.out.println("Unzipping: " + zipPath + " to: " + extractPath);
         Files.createDirectories(extractPath);
@@ -222,30 +232,22 @@ public class SyncAction extends AnAction {
                 }
                 zis.closeEntry();
             }
-        } catch (IOException e) {
-            throw new IOException("Failed to unzip file: " + zipPath, e);
         }
     }
 
-    private void mergeDirectory(Path sourceDir, Path targetDir) throws IOException {
-        if (!Files.exists(sourceDir)) {
-            throw new IOException("Source directory does not exist: " + sourceDir);
-        }
-
-        System.out.println("Merging directory: " + sourceDir + " to: " + targetDir);
-        Files.createDirectories(targetDir);
-        Files.walk(sourceDir).forEach(source -> {
-            try {
-                Path target = targetDir.resolve(sourceDir.relativize(source));
-                if (Files.isDirectory(source)) {
-                    Files.createDirectories(target);
-                } else {
-                    Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
-                    System.out.println("Copied: " + target);
-                }
-            } catch (IOException e) {
-                System.err.println("Failed to copy: " + source + " - " + e.getMessage());
+    private void mergeDirectory(Path source, Path target) throws IOException {
+        System.out.println("Merging source: " + source + " into target: " + target);
+        if (Files.isDirectory(source)) {
+            if (Files.notExists(target)) {
+                Files.createDirectories(target);
             }
-        });
+            try (DirectoryStream<Path> stream = Files.newDirectoryStream(source)) {
+                for (Path entry : stream) {
+                    mergeDirectory(entry, target.resolve(entry.getFileName()));
+                }
+            }
+        } else {
+            Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+        }
     }
 }
