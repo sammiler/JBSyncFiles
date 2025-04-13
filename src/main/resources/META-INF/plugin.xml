@@ -1,5 +1,5 @@
 <idea-plugin>
-    <id>com.example.syncfiles</id>
+    <id>syncfiles</id>
     <name>SyncFiles</name>
     <version>1.0.0</version>
     <vendor email="sammilergood@gmail.com" url="https://cplusplusbug.org">sammiller</vendor>

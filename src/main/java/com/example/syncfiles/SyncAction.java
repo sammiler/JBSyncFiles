@@ -135,7 +135,6 @@ public class SyncAction extends AnAction {
         String zipUrl = String.format("%s/zip/refs/heads/%s", repoRoot, branch);
         System.out.println("Fetching ZIP from: " + zipUrl);
 
-        // 配置 HttpClient 自动跟随重定向
         HttpClient client = HttpClient.newBuilder()
                 .followRedirects(HttpClient.Redirect.NORMAL) // 自动处理 301/302
                 .build();

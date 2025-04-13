@@ -29,13 +29,11 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         panel = new JPanel();
         panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
 
-        // 创建表格
         tableModel = new DefaultTableModel(new Object[]{"Source URL", "Target Path"}, 0);
         mappingsTable = new JBTable(tableModel);
         mappingsTable.setPreferredScrollableViewportSize(new java.awt.Dimension(500, 200));
         panel.add(new JScrollPane(mappingsTable));
 
-        // 添加按钮
         JPanel buttonPanel = new JPanel();
         JButton addButton = new JButton("Add Mapping");
         addButton.addActionListener(e -> tableModel.addRow(new Object[]{"", ""}));
@@ -50,7 +48,6 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         buttonPanel.add(removeButton);
         panel.add(buttonPanel);
 
-        // 加载现有配置
         reset();
         return panel;
     }
