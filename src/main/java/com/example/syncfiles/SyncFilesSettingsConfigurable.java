@@ -64,14 +64,14 @@ public class SyncFilesSettingsConfigurable implements Configurable {
 
         // 刷新时间设置
         JPanel refreshPanel = new JPanel();
-        refreshPanel.add(new JLabel("触发 IDE 刷新时间 (ms):"));
+        refreshPanel.add(new JLabel("触发重载刷新时间 (ms):"));
         refreshIntervalField = new JTextField(10);
         refreshPanel.add(refreshIntervalField);
         panel.add(refreshPanel);
 
         // 快捷键设置
         JPanel shortcutPanel = new JPanel();
-        shortcutPanel.add(new JLabel("IDE 刷新快捷键:"));
+        shortcutPanel.add(new JLabel("重载硬盘快捷键:"));
         shortcutLabel = new JLabel(currentShortcut);
         shortcutButton = new JButton("设置快捷键");
         shortcutButton.addActionListener(e -> startShortcutCapture());
