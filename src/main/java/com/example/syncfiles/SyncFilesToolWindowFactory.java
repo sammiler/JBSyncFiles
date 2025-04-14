@@ -9,17 +9,17 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
     @Override
     public void createToolWindowContent(Project project, ToolWindow toolWindow) {
         JPanel panel = new JPanel(new BorderLayout());
-        JButton syncButton = new JButton("Start Sync");
+        JButton syncButton = new JButton("开始同步");
         syncButton.addActionListener(e -> {
-            System.out.println("Start Sync button clicked in production");
+            System.out.println("生产环境中点击了开始同步按钮");
             try {
                 SyncFilesConfig config = SyncFilesConfig.getInstance(project);
-                System.out.println("Mappings loaded: " + config.getMappings());
+                System.out.println("加载的映射: " + config.getMappings());
                 new SyncAction().syncFiles(project);
             } catch (Exception ex) {
-                System.err.println("Sync failed: " + ex.getMessage());
+                System.err.println("同步失败: " + ex.getMessage());
                 ex.printStackTrace();
-                JOptionPane.showMessageDialog(null, "Sync failed: " + ex.getMessage(), "Error", JOptionPane.ERROR_MESSAGE);
+                JOptionPane.showMessageDialog(null, "同步失败: " + ex.getMessage(), "错误", JOptionPane.ERROR_MESSAGE);
             }
         });
         panel.add(syncButton, BorderLayout.NORTH);

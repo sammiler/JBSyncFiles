@@ -1,15 +1,17 @@
 <idea-plugin>
-    <id>com.sammiler.syncfiles</id>
+    <id>syncfiles</id>
     <name>SyncFiles</name>
-    <version>1.0.4</version>
+    <version>1.0.5</version>
     <vendor email="sammilergood@gmail.com" url="https://cplusplusbug.org">sammiler</vendor>
     <description>
         A CLion plugin to sync files and directories from GitHub repositories to your project.
     </description>
     <change-notes>
         Initial release with file and directory sync support.
+        Version 1.0.5: Fixed configuration initialization and improved shortcut capture.
     </change-notes>
 
+    <idea-version since-build="241.0" until-build="243.*"/>
     <depends>com.intellij.modules.platform</depends>
 
     <extensions defaultExtensionNs="com.intellij">
