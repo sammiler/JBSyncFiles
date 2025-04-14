@@ -18,11 +18,15 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
     public List<SyncAction.Mapping> mappings;
     public int refreshInterval;
     public String shortcutKey;
+    public String pythonScriptPath;  // 新增Python脚本路径
+    public String pythonExecutablePath;  // 新增Python可执行文件路径
 
     public SyncFilesConfig() {
         mappings = new ArrayList<>();
         refreshInterval = 1000;
         shortcutKey = "Ctrl+Shift+S";
+        pythonScriptPath = "";
+        pythonExecutablePath = "";
     }
 
     public static SyncFilesConfig getInstance(Project project) {
@@ -41,6 +45,12 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
         if (refreshInterval <= 0) {
             refreshInterval = 1000;
         }
+        if (pythonScriptPath == null) {
+            pythonScriptPath = "";
+        }
+        if (pythonExecutablePath == null) {
+            pythonExecutablePath = "";
+        }
         return this;
     }
 
@@ -56,8 +66,15 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
         if (refreshInterval <= 0) {
             refreshInterval = 1000;
         }
+        if (pythonScriptPath == null) {
+            pythonScriptPath = "";
+        }
+        if (pythonExecutablePath == null) {
+            pythonExecutablePath = "";
+        }
     }
 
+    // getters and setters
     public List<SyncAction.Mapping> getMappings() {
         return new ArrayList<>(mappings);
     }
@@ -80,5 +97,21 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
 
     public void setShortcutKey(String shortcutKey) {
         this.shortcutKey = shortcutKey;
+    }
+
+    public String getPythonScriptPath() {
+        return pythonScriptPath;
+    }
+
+    public void setPythonScriptPath(String pythonScriptPath) {
+        this.pythonScriptPath = pythonScriptPath;
+    }
+
+    public String getPythonExecutablePath() {
+        return pythonExecutablePath;
+    }
+
+    public void setPythonExecutablePath(String pythonExecutablePath) {
+        this.pythonExecutablePath = pythonExecutablePath;
     }
 }

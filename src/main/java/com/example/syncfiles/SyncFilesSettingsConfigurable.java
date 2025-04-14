@@ -4,6 +4,9 @@ import com.intellij.openapi.options.Configurable;
 import com.intellij.openapi.options.ConfigurationException;
 import com.intellij.openapi.project.Project;
 import com.intellij.ui.table.JBTable;
+import com.intellij.ui.components.JBLabel;
+import com.intellij.util.ui.JBUI;
+
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
@@ -23,6 +26,8 @@ public class SyncFilesSettingsConfigurable implements Configurable {
     private JLabel shortcutLabel;
     private String currentShortcut;
     private volatile boolean isCapturing;
+    private JTextField pythonScriptPathField;
+    private JTextField pythonExecutablePathField;
 
     public SyncFilesSettingsConfigurable(Project project) {
         this.project = project;
@@ -38,17 +43,27 @@ public class SyncFilesSettingsConfigurable implements Configurable {
 
     @Override
     public JComponent createComponent() {
-        panel = new JPanel();
-        panel.setLayout(new BoxLayout(panel, BoxLayout.Y_AXIS));
+        panel = new JPanel(new BorderLayout(10, 10));
+        panel.setBorder(JBUI.Borders.empty(10));
+
+        // 主面板使用GridBagLayout
+        JPanel mainPanel = new JPanel(new GridBagLayout());
+        GridBagConstraints gbc = new GridBagConstraints();
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = JBUI.insets(5);
 
         // 映射表
         tableModel = new DefaultTableModel(new Object[]{"源 URL", "目标路径"}, 0);
         mappingsTable = new JBTable(tableModel);
-        mappingsTable.setPreferredScrollableViewportSize(new java.awt.Dimension(500, 200));
-        panel.add(new JScrollPane(mappingsTable));
+        mappingsTable.setPreferredScrollableViewportSize(new Dimension(500, 200));
+        gbc.gridx = 0;
+        gbc.gridy = 0;
+        gbc.gridwidth = 2;
+        gbc.weighty = 1.0;
+        mainPanel.add(new JScrollPane(mappingsTable), gbc);
 
-        // 按钮
-        JPanel buttonPanel = new JPanel();
+        // 映射操作按钮
+        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         JButton addButton = new JButton("添加映射");
         addButton.addActionListener(e -> tableModel.addRow(new Object[]{"", ""}));
         JButton removeButton = new JButton("移除映射");
@@ -60,42 +75,62 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         });
         buttonPanel.add(addButton);
         buttonPanel.add(removeButton);
-        panel.add(buttonPanel);
+        gbc.gridy = 1;
+        gbc.weighty = 0;
+        mainPanel.add(buttonPanel, gbc);
 
         // 刷新时间设置
-        JPanel refreshPanel = new JPanel();
-        refreshPanel.add(new JLabel("触发重载刷新时间 (ms):"));
+        JPanel refreshPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        refreshPanel.add(new JBLabel("触发重载刷新时间 (ms):"));
         refreshIntervalField = new JTextField(10);
         refreshPanel.add(refreshIntervalField);
-        panel.add(refreshPanel);
+        gbc.gridy = 2;
+        mainPanel.add(refreshPanel, gbc);
+
+        // Python脚本路径
+        JPanel pythonPathPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        pythonPathPanel.add(new JBLabel("Python脚本路径:"));
+        pythonScriptPathField = new JTextField(30);
+        pythonPathPanel.add(pythonScriptPathField);
+        gbc.gridy = 3;
+        mainPanel.add(pythonPathPanel, gbc);
+
+        // Python可执行文件路径
+        JPanel pythonExePanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        pythonExePanel.add(new JBLabel("Python可执行地址:"));
+        pythonExecutablePathField = new JTextField(30);
+        pythonExePanel.add(pythonExecutablePathField);
+        gbc.gridy = 4;
+        mainPanel.add(pythonExePanel, gbc);
 
         // 快捷键设置
-        JPanel shortcutPanel = new JPanel();
-        shortcutPanel.add(new JLabel("重载硬盘快捷键:"));
+        JPanel shortcutPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        shortcutPanel.add(new JBLabel("重载硬盘快捷键:"));
         shortcutLabel = new JLabel(currentShortcut);
         shortcutButton = new JButton("设置快捷键");
         shortcutButton.addActionListener(e -> startShortcutCapture());
         shortcutPanel.add(shortcutLabel);
         shortcutPanel.add(shortcutButton);
-        panel.add(shortcutPanel);
+        gbc.gridy = 5;
+        mainPanel.add(shortcutPanel, gbc);
 
+        panel.add(mainPanel, BorderLayout.NORTH);
         reset();
         return panel;
     }
+
     private void startShortcutCapture() {
-        // 弹出对话框
+        // 保持原有的快捷键捕获逻辑
         JDialog dialog = new JDialog((Frame) SwingUtilities.getAncestorOfClass(Frame.class, panel), "设置快捷键", true);
         dialog.setLayout(new BorderLayout());
         dialog.setSize(300, 150);
         dialog.setLocationRelativeTo(panel);
 
-        // 文本框显示实时快捷键
         JTextField shortcutField = new JTextField(20);
-        shortcutField.setEditable(false); // 禁止手动编辑，仅显示捕获结果
+        shortcutField.setEditable(false);
         dialog.add(new JLabel("按下快捷键:"), BorderLayout.NORTH);
         dialog.add(shortcutField, BorderLayout.CENTER);
 
-        // 按钮面板
         JPanel buttonPanel = new JPanel();
         JButton okButton = new JButton("确认");
         JButton cancelButton = new JButton("取消");
@@ -103,11 +138,9 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         buttonPanel.add(cancelButton);
         dialog.add(buttonPanel, BorderLayout.SOUTH);
 
-        // 按键状态
         StringBuilder shortcutText = new StringBuilder();
         Set<Integer> pressedKeys = new HashSet<>();
 
-        // 按键监听
         KeyListener keyListener = new KeyAdapter() {
             @Override
             public void keyPressed(KeyEvent e) {
@@ -115,21 +148,11 @@ public class SyncFilesSettingsConfigurable implements Configurable {
                 int modifiers = e.getModifiersEx();
                 pressedKeys.add(keyCode);
 
-                // 重置显示
                 shortcutText.setLength(0);
+                if ((modifiers & InputEvent.CTRL_DOWN_MASK) != 0) shortcutText.append("Ctrl+");
+                if ((modifiers & InputEvent.ALT_DOWN_MASK) != 0) shortcutText.append("Alt+");
+                if ((modifiers & InputEvent.SHIFT_DOWN_MASK) != 0) shortcutText.append("Shift+");
 
-                // 添加修饰键
-                if ((modifiers & InputEvent.CTRL_DOWN_MASK) != 0) {
-                    shortcutText.append("Ctrl+");
-                }
-                if ((modifiers & InputEvent.ALT_DOWN_MASK) != 0) {
-                    shortcutText.append("Alt+");
-                }
-                if ((modifiers & InputEvent.SHIFT_DOWN_MASK) != 0) {
-                    shortcutText.append("Shift+");
-                }
-
-                // 添加主按键（最后一个非修饰键）
                 String keyText = null;
                 for (int code : pressedKeys) {
                     if (code != KeyEvent.VK_CONTROL && code != KeyEvent.VK_ALT && code != KeyEvent.VK_SHIFT) {
@@ -157,43 +180,37 @@ public class SyncFilesSettingsConfigurable implements Configurable {
                                 default -> KeyEvent.getKeyText(code);
                             };
                         }
-                        break; // 只取一个主按键
+                        break;
                     }
                 }
 
                 if (keyText != null) {
                     shortcutText.append(keyText);
                 } else if (shortcutText.length() > 0) {
-                    shortcutText.setLength(shortcutText.length() - 1); // 移除末尾 '+'
+                    shortcutText.setLength(shortcutText.length() - 1);
                 }
 
                 shortcutField.setText(shortcutText.toString());
-                System.out.println("实时快捷键: " + shortcutText);
             }
 
             @Override
             public void keyReleased(KeyEvent e) {
                 pressedKeys.remove(e.getKeyCode());
-                // 可选：释放时更新显示（如果需要动态变化）
             }
         };
 
         shortcutField.addKeyListener(keyListener);
 
-        // 确认按钮
         okButton.addActionListener(e -> {
             if (shortcutText.length() > 0) {
                 currentShortcut = shortcutText.toString();
                 shortcutLabel.setText(currentShortcut);
-                System.out.println("确认快捷键: " + currentShortcut);
             }
             dialog.dispose();
         });
 
-        // 取消按钮
         cancelButton.addActionListener(e -> dialog.dispose());
 
-        // 对话框关闭时清理
         dialog.addWindowListener(new WindowAdapter() {
             @Override
             public void windowClosing(WindowEvent e) {
@@ -213,7 +230,9 @@ public class SyncFilesSettingsConfigurable implements Configurable {
             int currentInterval = Integer.parseInt(refreshIntervalField.getText());
             return !currentMappings.equals(savedMappings) ||
                     currentInterval != config.getRefreshInterval() ||
-                    !currentShortcut.equals(config.getShortcutKey());
+                    !currentShortcut.equals(config.getShortcutKey()) ||
+                    !pythonScriptPathField.getText().equals(config.getPythonScriptPath()) ||
+                    !pythonExecutablePathField.getText().equals(config.getPythonExecutablePath());
         } catch (NumberFormatException e) {
             return true;
         }
@@ -245,6 +264,9 @@ public class SyncFilesSettingsConfigurable implements Configurable {
             throw new ConfigurationException("快捷键不能为空。");
         }
         config.setShortcutKey(currentShortcut);
+
+        config.setPythonScriptPath(pythonScriptPathField.getText().trim());
+        config.setPythonExecutablePath(pythonExecutablePathField.getText().trim());
     }
 
     @Override
@@ -258,6 +280,8 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         refreshIntervalField.setText(String.valueOf(config.getRefreshInterval()));
         currentShortcut = config.getShortcutKey();
         shortcutLabel.setText(currentShortcut);
+        pythonScriptPathField.setText(config.getPythonScriptPath());
+        pythonExecutablePathField.setText(config.getPythonExecutablePath());
     }
 
     @Override
@@ -268,6 +292,8 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         refreshIntervalField = null;
         shortcutButton = null;
         shortcutLabel = null;
+        pythonScriptPathField = null;
+        pythonExecutablePathField = null;
     }
 
     private List<SyncAction.Mapping> getMappingsFromTable() {
