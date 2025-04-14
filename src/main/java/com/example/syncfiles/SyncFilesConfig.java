@@ -2,7 +2,8 @@ package com.example.syncfiles;
 
 import com.intellij.openapi.components.*;
 import com.intellij.openapi.project.Project;
-import com.intellij.util.xmlb.XmlSerializerUtil;
+import com.intellij.util.xmlb.annotations.OptionTag;
+import com.intellij.util.xmlb.annotations.Tag;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
@@ -15,18 +16,22 @@ import java.util.List;
 )
 @Service(Service.Level.PROJECT)
 public final class SyncFilesConfig implements PersistentStateComponent<SyncFilesConfig> {
-    public List<SyncAction.Mapping> mappings;
-    public int refreshInterval;
-    public String shortcutKey;
-    public String pythonScriptPath;  // 新增Python脚本路径
-    public String pythonExecutablePath;  // 新增Python可执行文件路径
+    @Tag("mappings")
+    public List<Mapping> mappings = new ArrayList<>(); // 更新为独立 Mapping 类
+
+    @OptionTag("refreshInterval")
+    public int refreshInterval = 1000;
+
+    @OptionTag("shortcutKey")
+    public String shortcutKey = "Ctrl+Shift+S";
+
+    @OptionTag("pythonScriptPath")
+    public String pythonScriptPath = "";
+
+    @OptionTag("pythonExecutablePath")
+    public String pythonExecutablePath = "";
 
     public SyncFilesConfig() {
-        mappings = new ArrayList<>();
-        refreshInterval = 1000;
-        shortcutKey = "Ctrl+Shift+S";
-        pythonScriptPath = "";
-        pythonExecutablePath = "";
     }
 
     public static SyncFilesConfig getInstance(Project project) {
@@ -36,50 +41,24 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
     @Nullable
     @Override
     public SyncFilesConfig getState() {
-        if (mappings == null) {
-            mappings = new ArrayList<>();
-        }
-        if (shortcutKey == null || shortcutKey.trim().isEmpty()) {
-            shortcutKey = "Ctrl+Shift+S";
-        }
-        if (refreshInterval <= 0) {
-            refreshInterval = 1000;
-        }
-        if (pythonScriptPath == null) {
-            pythonScriptPath = "";
-        }
-        if (pythonExecutablePath == null) {
-            pythonExecutablePath = "";
-        }
         return this;
     }
 
     @Override
     public void loadState(@NotNull SyncFilesConfig state) {
-        XmlSerializerUtil.copyBean(state, this);
-        if (mappings == null) {
-            mappings = new ArrayList<>();
-        }
-        if (shortcutKey == null || shortcutKey.trim().isEmpty()) {
-            shortcutKey = "Ctrl+Shift+S";
-        }
-        if (refreshInterval <= 0) {
-            refreshInterval = 1000;
-        }
-        if (pythonScriptPath == null) {
-            pythonScriptPath = "";
-        }
-        if (pythonExecutablePath == null) {
-            pythonExecutablePath = "";
-        }
+        mappings.clear();
+        mappings.addAll(state.mappings);
+        refreshInterval = state.refreshInterval;
+        shortcutKey = state.shortcutKey != null ? state.shortcutKey : "Ctrl+Shift+S";
+        pythonScriptPath = state.pythonScriptPath != null ? state.pythonScriptPath : "";
+        pythonExecutablePath = state.pythonExecutablePath != null ? state.pythonExecutablePath : "";
     }
 
-    // getters and setters
-    public List<SyncAction.Mapping> getMappings() {
+    public List<Mapping> getMappings() {
         return new ArrayList<>(mappings);
     }
 
-    public void setMappings(List<SyncAction.Mapping> mappings) {
+    public void setMappings(List<Mapping> mappings) {
         this.mappings = new ArrayList<>(mappings);
     }
 

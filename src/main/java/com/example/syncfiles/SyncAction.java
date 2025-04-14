@@ -22,29 +22,6 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 public class SyncAction extends AnAction {
-    public static class Mapping {
-        public String sourceUrl;
-        public String targetPath;
-
-        public Mapping(String sourceUrl, String targetPath) {
-            this.sourceUrl = sourceUrl;
-            this.targetPath = targetPath;
-        }
-
-        @Override
-        public boolean equals(Object o) {
-            if (this == o) return true;
-            if (o == null || getClass() != o.getClass()) return false;
-            Mapping mapping = (Mapping) o;
-            return sourceUrl.equals(mapping.sourceUrl) && targetPath.equals(mapping.targetPath);
-        }
-
-        @Override
-        public int hashCode() {
-            return sourceUrl.hashCode() + targetPath.hashCode();
-        }
-    }
-
     public SyncAction() {
         super("Sync Files");
     }
@@ -61,7 +38,7 @@ public class SyncAction extends AnAction {
 
     public void syncFiles(Project project) {
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
-        List<Mapping> mappings = config.getMappings();
+        List<Mapping> mappings = config.getMappings(); // 更新为新 Mapping 类
         if (mappings.isEmpty()) {
             Messages.showWarningDialog("没有配置映射。请在 '设置 > SyncFiles 设置' 中检查。", "警告");
             return;

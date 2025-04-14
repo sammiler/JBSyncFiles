@@ -6,7 +6,6 @@ import com.intellij.openapi.project.Project;
 import com.intellij.ui.table.JBTable;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.util.ui.JBUI;
-
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
@@ -46,13 +45,11 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         panel = new JPanel(new BorderLayout(10, 10));
         panel.setBorder(JBUI.Borders.empty(10));
 
-        // 主面板使用GridBagLayout
         JPanel mainPanel = new JPanel(new GridBagLayout());
         GridBagConstraints gbc = new GridBagConstraints();
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.insets = JBUI.insets(5);
 
-        // 映射表
         tableModel = new DefaultTableModel(new Object[]{"源 URL", "目标路径"}, 0);
         mappingsTable = new JBTable(tableModel);
         mappingsTable.setPreferredScrollableViewportSize(new Dimension(500, 200));
@@ -62,7 +59,6 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         gbc.weighty = 1.0;
         mainPanel.add(new JScrollPane(mappingsTable), gbc);
 
-        // 映射操作按钮
         JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         JButton addButton = new JButton("添加映射");
         addButton.addActionListener(e -> tableModel.addRow(new Object[]{"", ""}));
@@ -79,7 +75,6 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         gbc.weighty = 0;
         mainPanel.add(buttonPanel, gbc);
 
-        // 刷新时间设置
         JPanel refreshPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         refreshPanel.add(new JBLabel("触发重载刷新时间 (ms):"));
         refreshIntervalField = new JTextField(10);
@@ -87,7 +82,6 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         gbc.gridy = 2;
         mainPanel.add(refreshPanel, gbc);
 
-        // Python脚本路径
         JPanel pythonPathPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         pythonPathPanel.add(new JBLabel("Python脚本路径:"));
         pythonScriptPathField = new JTextField(30);
@@ -95,7 +89,6 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         gbc.gridy = 3;
         mainPanel.add(pythonPathPanel, gbc);
 
-        // Python可执行文件路径
         JPanel pythonExePanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         pythonExePanel.add(new JBLabel("Python可执行地址:"));
         pythonExecutablePathField = new JTextField(30);
@@ -103,7 +96,6 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         gbc.gridy = 4;
         mainPanel.add(pythonExePanel, gbc);
 
-        // 快捷键设置
         JPanel shortcutPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
         shortcutPanel.add(new JBLabel("重载硬盘快捷键:"));
         shortcutLabel = new JLabel(currentShortcut);
@@ -120,7 +112,6 @@ public class SyncFilesSettingsConfigurable implements Configurable {
     }
 
     private void startShortcutCapture() {
-        // 保持原有的快捷键捕获逻辑
         JDialog dialog = new JDialog((Frame) SwingUtilities.getAncestorOfClass(Frame.class, panel), "设置快捷键", true);
         dialog.setLayout(new BorderLayout());
         dialog.setSize(300, 150);
@@ -223,42 +214,69 @@ public class SyncFilesSettingsConfigurable implements Configurable {
 
     @Override
     public boolean isModified() {
-        List<SyncAction.Mapping> currentMappings = getMappingsFromTable();
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
-        List<SyncAction.Mapping> savedMappings = config.getMappings();
+
+        List<Mapping> currentMappings = getMappingsFromTable();
+        List<Mapping> savedMappings = config.getMappings();
+        if (currentMappings.size() != savedMappings.size()) {
+            return true;
+        }
+        for (int i = 0; i < currentMappings.size(); i++) {
+            if (!currentMappings.get(i).equals(savedMappings.get(i))) {
+                return true;
+            }
+        }
+
         try {
             int currentInterval = Integer.parseInt(refreshIntervalField.getText());
-            return !currentMappings.equals(savedMappings) ||
-                    currentInterval != config.getRefreshInterval() ||
-                    !currentShortcut.equals(config.getShortcutKey()) ||
-                    !pythonScriptPathField.getText().equals(config.getPythonScriptPath()) ||
-                    !pythonExecutablePathField.getText().equals(config.getPythonExecutablePath());
+            if (currentInterval != config.getRefreshInterval()) {
+                return true;
+            }
         } catch (NumberFormatException e) {
             return true;
         }
+
+        if (!currentShortcut.equals(config.getShortcutKey())) {
+            return true;
+        }
+
+        String currentPythonPath = pythonScriptPathField.getText().trim();
+        String savedPythonPath = config.getPythonScriptPath() != null ? config.getPythonScriptPath() : "";
+        if (!currentPythonPath.equals(savedPythonPath)) {
+            return true;
+        }
+
+        String currentPythonExe = pythonExecutablePathField.getText().trim();
+        String savedPythonExe = config.getPythonExecutablePath() != null ? config.getPythonExecutablePath() : "";
+        if (!currentPythonExe.equals(savedPythonExe)) {
+            return true;
+        }
+
+        return false;
     }
 
     @Override
     public void apply() throws ConfigurationException {
-        List<SyncAction.Mapping> mappings = getMappingsFromTable();
-        for (SyncAction.Mapping mapping : mappings) {
+        SyncFilesConfig config = SyncFilesConfig.getInstance(project);
+
+        List<Mapping> mappings = getMappingsFromTable();
+        for (Mapping mapping : mappings) {
             if (mapping.sourceUrl.isEmpty() || mapping.targetPath.isEmpty()) {
                 throw new ConfigurationException("源 URL 和目标路径不能为空。");
             }
         }
-
-        SyncFilesConfig config = SyncFilesConfig.getInstance(project);
         config.setMappings(mappings);
 
+        int interval;
         try {
-            int interval = Integer.parseInt(refreshIntervalField.getText());
+            interval = Integer.parseInt(refreshIntervalField.getText());
             if (interval < 0) {
                 throw new ConfigurationException("刷新时间间隔不能为负数。");
             }
-            config.setRefreshInterval(interval);
         } catch (NumberFormatException e) {
             throw new ConfigurationException("无效的刷新时间格式。");
         }
+        config.setRefreshInterval(interval);
 
         if (currentShortcut == null || currentShortcut.trim().isEmpty()) {
             throw new ConfigurationException("快捷键不能为空。");
@@ -271,10 +289,10 @@ public class SyncFilesSettingsConfigurable implements Configurable {
 
     @Override
     public void reset() {
-        tableModel.setRowCount(0);
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
-        List<SyncAction.Mapping> mappings = config.getMappings();
-        for (SyncAction.Mapping mapping : mappings) {
+        tableModel.setRowCount(0);
+        List<Mapping> mappings = config.getMappings();
+        for (Mapping mapping : mappings) {
             tableModel.addRow(new Object[]{mapping.sourceUrl, mapping.targetPath});
         }
         refreshIntervalField.setText(String.valueOf(config.getRefreshInterval()));
@@ -296,13 +314,13 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         pythonExecutablePathField = null;
     }
 
-    private List<SyncAction.Mapping> getMappingsFromTable() {
-        List<SyncAction.Mapping> mappings = new ArrayList<>();
+    private List<Mapping> getMappingsFromTable() {
+        List<Mapping> mappings = new ArrayList<>();
         for (int i = 0; i < tableModel.getRowCount(); i++) {
             String sourceUrl = (String) tableModel.getValueAt(i, 0);
             String targetPath = (String) tableModel.getValueAt(i, 1);
             if (sourceUrl != null && !sourceUrl.trim().isEmpty() && targetPath != null && !targetPath.trim().isEmpty()) {
-                mappings.add(new SyncAction.Mapping(sourceUrl.trim(), targetPath.trim()));
+                mappings.add(new Mapping(sourceUrl.trim(), targetPath.trim()));
             }
         }
         return mappings;
