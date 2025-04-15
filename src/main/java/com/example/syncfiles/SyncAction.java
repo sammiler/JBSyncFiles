@@ -15,6 +15,7 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.*;
+import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
@@ -28,7 +29,9 @@ public class SyncAction extends AnAction {
     public @NotNull ActionUpdateThread getActionUpdateThread() {
         return ActionUpdateThread.BGT;
     }
+
     public static DirectoryWatcher directoryWatcher = null;
+
     public SyncAction() {
         super("Sync Files");
     }
@@ -45,7 +48,7 @@ public class SyncAction extends AnAction {
 
     public void syncFiles(Project project) {
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
-        List<Mapping> mappings = config.getMappings(); // 更新为新 Mapping 类
+        List<Mapping> mappings = config.getMappings();
         if (mappings.isEmpty()) {
             Messages.showWarningDialog("没有配置映射。请在 '设置 > syncFiles 设置' 中检查。", "警告");
             return;
@@ -67,11 +70,11 @@ public class SyncAction extends AnAction {
                             fetchDirectory(mapping.sourceUrl, targetPath, project.getBasePath());
                         } else {
                             ApplicationManager.getApplication().invokeLater(() ->
-                                Messages.showWarningDialog("不支持的 URL 格式: " + mapping.sourceUrl, "警告")
+                                    Messages.showWarningDialog("不支持的 URL 格式: " + mapping.sourceUrl, "警告")
                             );
                         }
                     }
-                    Util.refreshAndSetWatchDir(project,null,null);
+                    Util.refreshAndSetWatchDir(project, null, null);
                     Util.refreshAllFiles(project);
                 } catch (Exception ex) {
                     ApplicationManager.getApplication().invokeLater(() -> {
@@ -193,7 +196,6 @@ public class SyncAction extends AnAction {
             System.err.println("清理失败: " + e.getMessage());
         }
 
-
         System.out.println("目录已同步到: " + targetPath);
     }
 
@@ -234,9 +236,34 @@ public class SyncAction extends AnAction {
                 }
             }
         } else {
-            Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+            if (Files.notExists(target) || !filesAreIdentical(source, target)) {
+                Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
+                System.out.println("文件复制或更新: " + target);
+            } else {
+                System.out.println("文件未变化，跳过: " + target);
+            }
         }
     }
+
+    private boolean filesAreIdentical(Path source, Path target) throws IOException {
+        if (Files.size(source) != Files.size(target)) {
+            return false;
+        }
+        try (InputStream sourceStream = Files.newInputStream(source);
+             InputStream targetStream = Files.newInputStream(target)) {
+            byte[] sourceBuffer = new byte[8192];
+            byte[] targetBuffer = new byte[8192];
+            int sourceRead;
+            while ((sourceRead = sourceStream.read(sourceBuffer)) != -1) {
+                int targetRead = targetStream.read(targetBuffer);
+                if (sourceRead != targetRead || !Arrays.equals(sourceBuffer, 0, sourceRead, targetBuffer, 0, targetRead)) {
+                    return false;
+                }
+            }
+            return true;
+        }
+    }
+
     @Override
     public void update(@NotNull AnActionEvent e) {
         Project project = e.getProject();
