@@ -19,11 +19,6 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
     @Tag("mappings")
     public List<Mapping> mappings = new ArrayList<>(); // 更新为独立 Mapping 类
 
-    @OptionTag("refreshInterval")
-    public int refreshInterval = 1000;
-
-    @OptionTag("shortcutKey")
-    public String shortcutKey = "Ctrl+Shift+S";
 
     @OptionTag("pythonScriptPath")
     public String pythonScriptPath = "";
@@ -48,8 +43,6 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
     public void loadState(@NotNull SyncFilesConfig state) {
         mappings.clear();
         mappings.addAll(state.mappings);
-        refreshInterval = state.refreshInterval;
-        shortcutKey = state.shortcutKey != null ? state.shortcutKey : "Ctrl+Shift+S";
         pythonScriptPath = state.pythonScriptPath != null ? state.pythonScriptPath : "";
         pythonExecutablePath = state.pythonExecutablePath != null ? state.pythonExecutablePath : "";
     }
@@ -62,21 +55,6 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
         this.mappings = new ArrayList<>(mappings);
     }
 
-    public int getRefreshInterval() {
-        return refreshInterval;
-    }
-
-    public void setRefreshInterval(int refreshInterval) {
-        this.refreshInterval = refreshInterval;
-    }
-
-    public String getShortcutKey() {
-        return shortcutKey;
-    }
-
-    public void setShortcutKey(String shortcutKey) {
-        this.shortcutKey = shortcutKey;
-    }
 
     public String getPythonScriptPath() {
         return pythonScriptPath;

@@ -16,12 +16,14 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.*;
 import java.util.List;
+import java.util.Objects;
 import java.util.Timer;
 import java.util.TimerTask;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 public class SyncAction extends AnAction {
+    public static DirectoryWatcher directoryWatcher = null;
     public SyncAction() {
         super("Sync Files");
     }
@@ -43,7 +45,6 @@ public class SyncAction extends AnAction {
             Messages.showWarningDialog("没有配置映射。请在 '设置 > SyncFiles 设置' 中检查。", "警告");
             return;
         }
-
         ProgressManager.getInstance().run(new Task.Backgroundable(project, "正在同步 GitHub 文件", false) {
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
@@ -60,21 +61,11 @@ public class SyncAction extends AnAction {
                         } else if (mapping.sourceUrl.contains("/tree/")) {
                             fetchDirectory(mapping.sourceUrl, targetPath, project.getBasePath());
                         } else {
-                            Messages.showWarningDialog("不支持的 URL 格式: " + mapping.sourceUrl, "警告");
+                            ApplicationManager.getApplication().invokeLater(() -> {
+                                Messages.showWarningDialog("不支持的 URL 格式: " + mapping.sourceUrl, "警告");
+                            });
                         }
                     }
-
-                    ApplicationManager.getApplication().invokeLater(() -> {
-                        Messages.showInfoMessage("同步成功完成！", "成功");
-                        new Timer().schedule(new TimerTask() {
-                            @Override
-                            public void run() {
-                                ApplicationManager.getApplication().invokeLater(() -> {
-                                    project.getBaseDir().refresh(false, true);
-                                });
-                            }
-                        }, 1000);
-                    });
 
                 } catch (Exception ex) {
                     ApplicationManager.getApplication().invokeLater(() -> {
