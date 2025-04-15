@@ -57,13 +57,12 @@ public class Util {
         if (SyncAction.directoryWatcher == null) {
             try {
                 SyncAction.directoryWatcher = new DirectoryWatcher(project);
-                SyncAction.directoryWatcher.setSyncFilesToolWindowFactory(syncFilesToolWindowFactory);
             } catch (IOException e) {
                 JOptionPane.showMessageDialog(null, "配置文件中目录不存在: ", "错误", JOptionPane.ERROR_MESSAGE);
                 System.err.println(e.getMessage());
             }
         }
-
+        SyncAction.directoryWatcher.setSyncFilesToolWindowFactory(syncFilesToolWindowFactory);
     }
     public static void forceRefreshVFS(String scriptPath)
     {
