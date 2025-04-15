@@ -84,9 +84,6 @@ public class DirectoryWatcher {
                     boolean valid = key.reset();
                     if (!valid) {
                         keys.remove(key);
-                        if (keys.isEmpty()) {
-                            continue;
-                        }
                     }
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();

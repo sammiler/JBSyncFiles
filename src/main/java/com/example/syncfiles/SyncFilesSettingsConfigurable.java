@@ -1,10 +1,8 @@
 package com.example.syncfiles;
 
-import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.options.Configurable;
 import com.intellij.openapi.options.ConfigurationException;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.ui.Messages;
 import com.intellij.ui.table.JBTable;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.util.ui.JBUI;
@@ -12,15 +10,17 @@ import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
 import java.io.IOException;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap;
 import java.util.List;
+import java.util.Map;
 
 public class SyncFilesSettingsConfigurable implements Configurable {
     private JPanel panel;
     private JBTable mappingsTable;
-    private DefaultTableModel tableModel;
+    private JBTable envVarsTable;
+    private DefaultTableModel mappingsTableModel;
+    private DefaultTableModel envVarsTableModel;
     private final Project project;
     private JTextField pythonScriptPathField;
     private JTextField pythonExecutablePathField;
@@ -44,61 +44,90 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         gbc.fill = GridBagConstraints.HORIZONTAL;
         gbc.insets = JBUI.insets(5);
 
-        tableModel = new DefaultTableModel(new Object[]{"源 URL", "目标路径"}, 0);
-        mappingsTable = new JBTable(tableModel);
-        mappingsTable.setPreferredScrollableViewportSize(new Dimension(500, 200));
+        // 文件映射表格
         gbc.gridx = 0;
         gbc.gridy = 0;
         gbc.gridwidth = 2;
-        gbc.weighty = 1.0;
+        gbc.weighty = 0.3; // 降低映射表格高度
+        mainPanel.add(new JBLabel("文件映射:"), gbc);
+
+        gbc.gridy = 1;
+        mappingsTableModel = new DefaultTableModel(new Object[]{"源 URL", "目标路径"}, 0);
+        mappingsTable = new JBTable(mappingsTableModel);
+        mappingsTable.setPreferredScrollableViewportSize(new Dimension(500, 100)); // 减小高度
         mainPanel.add(new JScrollPane(mappingsTable), gbc);
 
-        JPanel buttonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        JButton addButton = new JButton("添加映射");
-        addButton.addActionListener(e -> tableModel.addRow(new Object[]{"", ""}));
-        JButton removeButton = new JButton("移除映射");
-        removeButton.addActionListener(e -> {
+        JPanel mappingsButtonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JButton addMappingButton = new JButton("添加映射");
+        addMappingButton.addActionListener(e -> mappingsTableModel.addRow(new Object[]{"", ""}));
+        JButton removeMappingButton = new JButton("移除映射");
+        removeMappingButton.addActionListener(e -> {
             int selectedRow = mappingsTable.getSelectedRow();
             if (selectedRow >= 0) {
-                tableModel.removeRow(selectedRow);
+                mappingsTableModel.removeRow(selectedRow);
             }
         });
-        buttonPanel.add(addButton);
-        buttonPanel.add(removeButton);
-        gbc.gridy = 1;
-        gbc.weighty = 0;
-        mainPanel.add(buttonPanel, gbc);
-
-
+        mappingsButtonPanel.add(addMappingButton);
+        mappingsButtonPanel.add(removeMappingButton);
         gbc.gridy = 2;
+        gbc.weighty = 0;
+        mainPanel.add(mappingsButtonPanel, gbc);
 
+        // 环境变量表格
+        gbc.gridy = 3;
+        mainPanel.add(new JBLabel("环境变量:"), gbc);
+
+        gbc.gridy = 4;
+        envVarsTableModel = new DefaultTableModel(new Object[]{"变量名", "变量值"}, 0);
+        envVarsTable = new JBTable(envVarsTableModel);
+        envVarsTable.setPreferredScrollableViewportSize(new Dimension(500, 100));
+        mainPanel.add(new JScrollPane(envVarsTable), gbc);
+
+        JPanel envVarsButtonPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+        JButton addEnvVarButton = new JButton("添加环境变量");
+        addEnvVarButton.addActionListener(e -> envVarsTableModel.addRow(new Object[]{"", ""}));
+        JButton removeEnvVarButton = new JButton("移除环境变量");
+        removeEnvVarButton.addActionListener(e -> {
+            int selectedRow = envVarsTable.getSelectedRow();
+            if (selectedRow >= 0) {
+                envVarsTableModel.removeRow(selectedRow);
+            }
+        });
+        envVarsButtonPanel.add(addEnvVarButton);
+        envVarsButtonPanel.add(removeEnvVarButton);
+        gbc.gridy = 5;
+        mainPanel.add(envVarsButtonPanel, gbc);
+
+        // Python 路径输入框
         JPanel pythonPathPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        pythonPathPanel.add(new JBLabel("Python脚本路径:"));
+        JBLabel pythonScriptLabel = new JBLabel("Python脚本路径:");
+        pythonScriptLabel.setPreferredSize(new Dimension(120, pythonScriptLabel.getPreferredSize().height));
+        pythonPathPanel.add(pythonScriptLabel);
         pythonScriptPathField = new JTextField(30);
         pythonPathPanel.add(pythonScriptPathField);
-        gbc.gridy = 3;
+        gbc.gridy = 6;
         mainPanel.add(pythonPathPanel, gbc);
 
+        // Python 可执行路径输入框
         JPanel pythonExePanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
-        pythonExePanel.add(new JBLabel("Python可执行地址:"));
+        JBLabel pythonExeLabel = new JBLabel("Python可执行地址:");
+        pythonExeLabel.setPreferredSize(new Dimension(120, pythonExeLabel.getPreferredSize().height));
+        pythonExePanel.add(pythonExeLabel);
         pythonExecutablePathField = new JTextField(30);
         pythonExePanel.add(pythonExecutablePathField);
-        gbc.gridy = 4;
+        gbc.gridy = 7;
         mainPanel.add(pythonExePanel, gbc);
-
-
-        gbc.gridy = 5;
 
         panel.add(mainPanel, BorderLayout.NORTH);
         reset();
         return panel;
     }
 
-
     @Override
     public boolean isModified() {
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
 
+        // 检查文件映射
         List<Mapping> currentMappings = getMappingsFromTable();
         List<Mapping> savedMappings = config.getMappings();
         if (currentMappings.size() != savedMappings.size()) {
@@ -110,7 +139,14 @@ public class SyncFilesSettingsConfigurable implements Configurable {
             }
         }
 
+        // 检查环境变量
+        Map<String, String> currentEnvVars = getEnvVarsFromTable();
+        Map<String, String> savedEnvVars = config.getEnvVariables();
+        if (!currentEnvVars.equals(savedEnvVars)) {
+            return true;
+        }
 
+        // 检查 Python 路径
         String currentPythonPath = pythonScriptPathField.getText().trim();
         String savedPythonPath = config.getPythonScriptPath() != null ? config.getPythonScriptPath() : "";
         if (!currentPythonPath.equals(savedPythonPath)) {
@@ -126,6 +162,7 @@ public class SyncFilesSettingsConfigurable implements Configurable {
     public void apply() throws ConfigurationException {
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
 
+        // 保存文件映射
         List<Mapping> mappings = getMappingsFromTable();
         for (Mapping mapping : mappings) {
             if (mapping.sourceUrl.isEmpty() || mapping.targetPath.isEmpty()) {
@@ -133,25 +170,47 @@ public class SyncFilesSettingsConfigurable implements Configurable {
             }
         }
         config.setMappings(mappings);
+
+        // 保存环境变量
+        Map<String, String> envVars = getEnvVarsFromTable();
+        for (Map.Entry<String, String> entry : envVars.entrySet()) {
+            if (entry.getKey().isEmpty()) {
+                throw new ConfigurationException("环境变量名不能为空。");
+            }
+        }
+        config.setEnvVariables(envVars);
+
+        // 保存 Python 路径
         config.setPythonScriptPath(pythonScriptPathField.getText().trim());
         config.setPythonExecutablePath(pythonExecutablePathField.getText().trim());
+
         try {
-            Util.refreshAndSetWatchDir(project,null,null);
+            Util.refreshAndSetWatchDir(project, null, null);
             Util.refreshAllFiles(project);
         } catch (IOException e) {
-            System.err.println(e.getMessage());
+            throw new ConfigurationException("刷新目录失败: " + e.getMessage());
         }
-
     }
 
     @Override
     public void reset() {
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
-        tableModel.setRowCount(0);
+
+        // 重置文件映射
+        mappingsTableModel.setRowCount(0);
         List<Mapping> mappings = config.getMappings();
         for (Mapping mapping : mappings) {
-            tableModel.addRow(new Object[]{mapping.sourceUrl, mapping.targetPath});
+            mappingsTableModel.addRow(new Object[]{mapping.sourceUrl, mapping.targetPath});
         }
+
+        // 重置环境变量
+        envVarsTableModel.setRowCount(0);
+        Map<String, String> envVars = config.getEnvVariables();
+        for (Map.Entry<String, String> entry : envVars.entrySet()) {
+            envVarsTableModel.addRow(new Object[]{entry.getKey(), entry.getValue()});
+        }
+
+        // 重置 Python 路径
         pythonScriptPathField.setText(config.getPythonScriptPath());
         pythonExecutablePathField.setText(config.getPythonExecutablePath());
     }
@@ -160,20 +219,34 @@ public class SyncFilesSettingsConfigurable implements Configurable {
     public void disposeUIResources() {
         panel = null;
         mappingsTable = null;
-        tableModel = null;
+        envVarsTable = null;
+        mappingsTableModel = null;
+        envVarsTableModel = null;
         pythonScriptPathField = null;
         pythonExecutablePathField = null;
     }
 
     private List<Mapping> getMappingsFromTable() {
         List<Mapping> mappings = new ArrayList<>();
-        for (int i = 0; i < tableModel.getRowCount(); i++) {
-            String sourceUrl = (String) tableModel.getValueAt(i, 0);
-            String targetPath = (String) tableModel.getValueAt(i, 1);
+        for (int i = 0; i < mappingsTableModel.getRowCount(); i++) {
+            String sourceUrl = (String) mappingsTableModel.getValueAt(i, 0);
+            String targetPath = (String) mappingsTableModel.getValueAt(i, 1);
             if (sourceUrl != null && !sourceUrl.trim().isEmpty() && targetPath != null && !targetPath.trim().isEmpty()) {
                 mappings.add(new Mapping(sourceUrl.trim(), targetPath.trim()));
             }
         }
         return mappings;
+    }
+
+    private Map<String, String> getEnvVarsFromTable() {
+        Map<String, String> envVars = new HashMap<>();
+        for (int i = 0; i < envVarsTableModel.getRowCount(); i++) {
+            String key = (String) envVarsTableModel.getValueAt(i, 0);
+            String value = (String) envVarsTableModel.getValueAt(i, 1);
+            if (key != null && !key.trim().isEmpty()) {
+                envVars.put(key.trim(), value != null ? value.trim() : "");
+            }
+        }
+        return envVars;
     }
 }
