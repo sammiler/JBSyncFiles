@@ -5,7 +5,7 @@ import com.intellij.openapi.project.Project;
 import com.intellij.util.xmlb.annotations.OptionTag;
 import com.intellij.util.xmlb.annotations.Tag;
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
+
 
 import java.util.ArrayList;
 import java.util.List;
@@ -16,6 +16,8 @@ import java.util.List;
 )
 @Service(Service.Level.PROJECT)
 public final class SyncFilesConfig implements PersistentStateComponent<SyncFilesConfig> {
+
+
     @Tag("mappings")
     public List<Mapping> mappings = new ArrayList<>(); // 更新为独立 Mapping 类
 
@@ -26,6 +28,8 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
     @OptionTag("pythonExecutablePath")
     public String pythonExecutablePath = "";
 
+
+
     public SyncFilesConfig() {
     }
 
@@ -33,9 +37,9 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
         return project.getService(SyncFilesConfig.class);
     }
 
-    @Nullable
+
     @Override
-    public SyncFilesConfig getState() {
+    public @NotNull SyncFilesConfig getState() {
         return this;
     }
 
@@ -69,6 +73,8 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
     }
 
     public void setPythonExecutablePath(String pythonExecutablePath) {
+
         this.pythonExecutablePath = pythonExecutablePath;
     }
+
 }

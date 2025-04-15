@@ -2,14 +2,17 @@ package com.example.syncfiles;
 
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.wm.ToolWindow;
-import com.intellij.openapi.wm.ToolWindowManager;
-import com.jetbrains.rd.generator.nova.INullable;
+import com.intellij.openapi.vfs.LocalFileSystem;
+import com.intellij.openapi.vfs.VirtualFile;
+
 
 import java.io.IOException;
 import java.nio.file.*;
 import java.util.HashMap;
 import java.util.Map;
+import java.util.Objects;
+import java.util.stream.Stream;
+
 import static java.nio.file.StandardWatchEventKinds.*;
 
 public class DirectoryWatcher {
@@ -25,21 +28,24 @@ public class DirectoryWatcher {
     }
 
     public void watchDirectory(Path dir) throws IOException {
-        Files.walk(dir)
-                .filter(Files::isDirectory)
-                .forEach(subDir -> {
-                    try {
-                        WatchKey key = subDir.register(watchService, ENTRY_CREATE, ENTRY_MODIFY, ENTRY_DELETE);
-                        keys.put(key, subDir);
-                        System.out.println("监控目录: " + subDir);
-                    } catch (IOException e) {
-                        System.err.println("无法注册目录: " + subDir);
-                    }
-                });
+        try (Stream<Path> pathStream = Files.walk(dir)) {
+            pathStream
+                    .filter(Files::isDirectory)
+                    .forEach(subDir -> {
+                        try {
+                            WatchKey key = subDir.register(watchService, ENTRY_CREATE, ENTRY_MODIFY, ENTRY_DELETE);
+                            keys.put(key, subDir);
+                            System.out.println("监控目录: " + subDir);
+                        } catch (IOException e) {
+                            System.err.println("无法注册目录: " + subDir);
+                        }
+                    });
+        }
     }
-    public void refreshWindow(String scriptPath,String pythonPath) throws IOException
+
+    public void refreshButtons(String scriptPath,String pythonPath) throws IOException
     {
-        syncFilesToolWindowFactory.refreshScriptButtons(project,scriptPath,pythonPath);
+        syncFilesToolWindowFactory.refreshScriptButtons(project,scriptPath,pythonPath,false,false);
     }
     public void startWatching() {
         if (running) {
@@ -56,25 +62,30 @@ public class DirectoryWatcher {
                     }
                     for (WatchEvent<?> event : key.pollEvents()) {
                         WatchEvent.Kind<?> kind = event.kind();
-                        Path fileName = ((WatchEvent<Path>) event).context();
-                        Path changedPath = dir.resolve(fileName);
-                        System.out.println(kind.name() + ": " + changedPath);
-                        if (changedPath.toString().endsWith(".py")) {
-                            ApplicationManager.getApplication().invokeLater(() -> {
-                                syncFilesToolWindowFactory.refreshScriptButtons(project);
-                            });
+                        if (kind == StandardWatchEventKinds.OVERFLOW) {
+                            continue; // 跳过无效事件
                         }
-                        // 触发 IntelliJ 目录刷新
-                        ApplicationManager.getApplication().invokeLater(() -> {
-                            project.getBaseDir().refresh(false, true);
-                        });
 
+                        @SuppressWarnings("unchecked")
+                        WatchEvent<Path> pathEvent = (WatchEvent<Path>) event;
+
+                        Path fileName = pathEvent.context();
+                        Path changedPath = dir.resolve(fileName);
+
+                        System.out.println(kind.name() + ": " + changedPath);
+                        if (fileName.toString().endsWith(".py")) {
+                            ApplicationManager.getApplication().invokeLater(() ->
+                                    syncFilesToolWindowFactory.refreshScriptButtons(project,false,false)
+                            );
+                        }
+
+                        Util.refreshAllFiles(project);
                     }
                     boolean valid = key.reset();
                     if (!valid) {
                         keys.remove(key);
                         if (keys.isEmpty()) {
-                            break;
+                            continue;
                         }
                     }
                 } catch (InterruptedException e) {

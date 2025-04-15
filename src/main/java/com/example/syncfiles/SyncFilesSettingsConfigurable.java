@@ -1,5 +1,6 @@
 package com.example.syncfiles;
 
+import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.options.Configurable;
 import com.intellij.openapi.options.ConfigurationException;
 import com.intellij.openapi.project.Project;
@@ -10,7 +11,6 @@ import com.intellij.util.ui.JBUI;
 import javax.swing.*;
 import javax.swing.table.DefaultTableModel;
 import java.awt.*;
-import java.awt.event.*;
 import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -27,7 +27,6 @@ public class SyncFilesSettingsConfigurable implements Configurable {
 
     public SyncFilesSettingsConfigurable(Project project) {
         this.project = project;
-        SyncFilesConfig config = SyncFilesConfig.getInstance(project);
     }
 
     @Override
@@ -134,19 +133,13 @@ public class SyncFilesSettingsConfigurable implements Configurable {
             }
         }
         config.setMappings(mappings);
-
-
-        Path rootDir = Paths.get(Objects.requireNonNull(project.getBasePath()));
-
         config.setPythonScriptPath(pythonScriptPathField.getText().trim());
         config.setPythonExecutablePath(pythonExecutablePathField.getText().trim());
         try {
-            SyncAction.directoryWatcher.watchDirectory(Paths.get(pythonScriptPathField.getText().trim()));
-            SyncAction.directoryWatcher.watchDirectory(rootDir);
-            SyncAction.directoryWatcher.startWatching();
-            SyncAction.directoryWatcher.refreshWindow(pythonScriptPathField.getText().trim(),pythonExecutablePathField.getText().trim());
+            Util.refreshAndSetWatchDir(project,null,null);
+            Util.refreshAllFiles(project);
         } catch (IOException e) {
-            throw new RuntimeException(e);
+            System.err.println(e.getMessage());
         }
 
     }

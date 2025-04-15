@@ -15,14 +15,19 @@ import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.file.*;
+import java.util.Comparator;
 import java.util.List;
 import java.util.Objects;
-import java.util.Timer;
-import java.util.TimerTask;
+import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;
 
 public class SyncAction extends AnAction {
+
+    @Override
+    public @NotNull ActionUpdateThread getActionUpdateThread() {
+        return ActionUpdateThread.BGT;
+    }
     public static DirectoryWatcher directoryWatcher = null;
     public SyncAction() {
         super("Sync Files");
@@ -42,10 +47,10 @@ public class SyncAction extends AnAction {
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
         List<Mapping> mappings = config.getMappings(); // 更新为新 Mapping 类
         if (mappings.isEmpty()) {
-            Messages.showWarningDialog("没有配置映射。请在 '设置 > SyncFiles 设置' 中检查。", "警告");
+            Messages.showWarningDialog("没有配置映射。请在 '设置 > syncFiles 设置' 中检查。", "警告");
             return;
         }
-        ProgressManager.getInstance().run(new Task.Backgroundable(project, "正在同步 GitHub 文件", false) {
+        ProgressManager.getInstance().run(new Task.Backgroundable(project, "正在同步 gitHub 文件", false) {
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
                 indicator.setText("开始同步...");
@@ -54,24 +59,25 @@ public class SyncAction extends AnAction {
                         indicator.setText("正在同步: " + mapping.sourceUrl);
                         Path targetPath = mapping.targetPath.startsWith("/") || mapping.targetPath.contains(":")
                                 ? Paths.get(mapping.targetPath)
-                                : Paths.get(project.getBasePath(), mapping.targetPath);
+                                : Paths.get(Objects.requireNonNull(project.getBasePath()), mapping.targetPath);
                         System.out.println("目标路径解析: " + targetPath);
                         if (mapping.sourceUrl.contains("raw.githubusercontent.com")) {
                             fetchFile(mapping.sourceUrl, targetPath);
                         } else if (mapping.sourceUrl.contains("/tree/")) {
                             fetchDirectory(mapping.sourceUrl, targetPath, project.getBasePath());
                         } else {
-                            ApplicationManager.getApplication().invokeLater(() -> {
-                                Messages.showWarningDialog("不支持的 URL 格式: " + mapping.sourceUrl, "警告");
-                            });
+                            ApplicationManager.getApplication().invokeLater(() ->
+                                Messages.showWarningDialog("不支持的 URL 格式: " + mapping.sourceUrl, "警告")
+                            );
                         }
                     }
-
+                    Util.refreshAndSetWatchDir(project,null,null);
+                    Util.refreshAllFiles(project);
                 } catch (Exception ex) {
                     ApplicationManager.getApplication().invokeLater(() -> {
                         Messages.showErrorDialog("同步失败: " + ex.getMessage(), "错误");
                     });
-                    ex.printStackTrace();
+                    System.err.println(ex.getMessage());
                 }
             }
         });
@@ -157,8 +163,7 @@ public class SyncAction extends AnAction {
 
         Path sourceDir;
         try (DirectoryStream<Path> stream = Files.newDirectoryStream(tempExtractPath)) {
-            Path firstDir = stream.iterator().next();
-            sourceDir = firstDir;
+            sourceDir = stream.iterator().next();
             System.out.println("顶级目录: " + sourceDir);
         }
 
@@ -175,16 +180,19 @@ public class SyncAction extends AnAction {
 
         try {
             Files.deleteIfExists(zipPath);
-            Files.walk(tempExtractPath).sorted((p1, p2) -> -p1.compareTo(p2)).forEach(p -> {
-                try {
-                    Files.deleteIfExists(p);
-                } catch (IOException e) {
-                    System.err.println("删除失败: " + p);
-                }
-            });
+            try (Stream<Path> pathStream = Files.walk(tempExtractPath)) {
+                pathStream.sorted(Comparator.reverseOrder()).forEach(p -> {
+                    try {
+                        Files.deleteIfExists(p);
+                    } catch (IOException e) {
+                        System.err.println("删除失败: " + p);
+                    }
+                });
+            }
         } catch (IOException e) {
             System.err.println("清理失败: " + e.getMessage());
         }
+
 
         System.out.println("目录已同步到: " + targetPath);
     }
@@ -229,7 +237,6 @@ public class SyncAction extends AnAction {
             Files.copy(source, target, StandardCopyOption.REPLACE_EXISTING);
         }
     }
-
     @Override
     public void update(@NotNull AnActionEvent e) {
         Project project = e.getProject();
