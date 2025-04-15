@@ -8,7 +8,6 @@ import com.intellij.openapi.vfs.VirtualFile;
 
 import javax.swing.*;
 import java.io.IOException;
-import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.Objects;
 

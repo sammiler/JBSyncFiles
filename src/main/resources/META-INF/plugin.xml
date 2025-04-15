@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>syncfiles</id>
     <name>SyncFiles</name>
-    <version>1.0.7</version>
+    <version>2.0.0</version>
     <vendor email="sammilergood@gmail.com" url="https://cplusplusbug.org">sammiler</vendor>
     <description>
         A CLion plugin to sync files and directories from GitHub repositories to your project.
