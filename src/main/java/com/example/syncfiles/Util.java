@@ -41,13 +41,11 @@ public class Util {
     public static void refreshAllFiles(Project project)
     {
         // 触发 IntelliJ 目录刷新
-        ApplicationManager.getApplication().executeOnPooledThread(() -> {
-            String basePath = project.getBasePath();
-            VirtualFile baseDir = LocalFileSystem.getInstance().findFileByPath(Objects.requireNonNull(basePath));
-            if (baseDir != null) {
-                baseDir.refresh(false, true);
-            }
-        });
+        String basePath = project.getBasePath();
+        VirtualFile baseDir = LocalFileSystem.getInstance().findFileByPath(Objects.requireNonNull(basePath));
+        if (baseDir != null) {
+            baseDir.refresh(false, true);
+        }
     }
 
     public static void InitToolWindowFactory(Project project,SyncFilesToolWindowFactory syncFilesToolWindowFactory)

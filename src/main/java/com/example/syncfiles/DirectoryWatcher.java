@@ -4,7 +4,7 @@ import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.project.Project;
 
 
-
+import com.intellij.openapi.diagnostic.Logger;
 import java.io.IOException;
 import java.nio.file.*;
 import java.util.HashMap;
@@ -19,7 +19,7 @@ public class DirectoryWatcher {
     private final Project project;
     private SyncFilesToolWindowFactory syncFilesToolWindowFactory;
     private Boolean running = false;
-
+    private static final Logger LOG = Logger.getInstance(DirectoryWatcher.class);
     public DirectoryWatcher(Project project) throws IOException {
         this.project = project;
         this.watchService = FileSystems.getDefault().newWatchService();
@@ -33,8 +33,10 @@ public class DirectoryWatcher {
                         try {
                             WatchKey key = subDir.register(watchService, ENTRY_CREATE, ENTRY_MODIFY, ENTRY_DELETE);
                             keys.put(key, subDir);
+                            LOG.info("监控目录 " + subDir);
                             System.out.println("监控目录: " + subDir);
                         } catch (IOException e) {
+                            LOG.error("无法注册目录" + e.getMessage());
                             System.err.println("无法注册目录: " + subDir);
                         }
                     });
@@ -50,7 +52,7 @@ public class DirectoryWatcher {
             return;
         }
         running = true;
-        new Thread(() -> {
+        ApplicationManager.getApplication().executeOnPooledThread(() -> {
             while (true) {
                 try {
                     WatchKey key = watchService.take();
@@ -61,7 +63,7 @@ public class DirectoryWatcher {
                     for (WatchEvent<?> event : key.pollEvents()) {
                         WatchEvent.Kind<?> kind = event.kind();
                         if (kind == StandardWatchEventKinds.OVERFLOW) {
-                            continue; // 跳过无效事件
+                            continue;
                         }
 
                         @SuppressWarnings("unchecked")
@@ -70,10 +72,10 @@ public class DirectoryWatcher {
                         Path fileName = pathEvent.context();
                         Path changedPath = dir.resolve(fileName);
 
-                        System.out.println(kind.name() + ": " + changedPath);
+                        LOG.info(kind.name() + ": " + changedPath);
                         if (fileName.toString().endsWith(".py")) {
                             ApplicationManager.getApplication().invokeLater(() ->
-                                    syncFilesToolWindowFactory.refreshScriptButtons(project,false,false)
+                                    syncFilesToolWindowFactory.refreshScriptButtons(project, false, false)
                             );
                         }
 
@@ -88,7 +90,8 @@ public class DirectoryWatcher {
                     break;
                 }
             }
-        }, "DirectoryWatcher").start();
+        });
+
     }
 
     public void stop() throws IOException {
