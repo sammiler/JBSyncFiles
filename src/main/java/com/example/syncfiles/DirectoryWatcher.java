@@ -4,12 +4,10 @@ import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.*;
 import com.intellij.openapi.vfs.newvfs.BulkFileListener;
-import com.intellij.openapi.vfs.newvfs.events.VFileContentChangeEvent;
-import com.intellij.openapi.vfs.newvfs.events.VFileCreateEvent;
-import com.intellij.openapi.vfs.newvfs.events.VFileDeleteEvent;
-import com.intellij.openapi.vfs.newvfs.events.VFileEvent;
+import com.intellij.openapi.vfs.newvfs.events.*;
 import com.intellij.util.messages.MessageBusConnection;
 import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable;
 
 import java.io.IOException;
 import java.nio.file.Path;
@@ -51,15 +49,7 @@ public class DirectoryWatcher {
             @Override
             public void after(@NotNull List<? extends VFileEvent> events) {
                 for (VFileEvent event : events) {
-                    VirtualFile file = null;
-
-                    if (event instanceof VFileContentChangeEvent) {
-                        file = ((VFileContentChangeEvent) event).getFile();
-                    } else if (event instanceof VFileCreateEvent) {
-                        file = ((VFileCreateEvent) event).getFile();
-                    } else if (event instanceof VFileDeleteEvent) {
-                        file = ((VFileDeleteEvent) event).getFile();
-                    }
+                    VirtualFile file = extractFileFromEvent(event);
                     if (file == null) continue;
 
                     String filePath = file.getPath().replace('\\', '/');
@@ -87,6 +77,27 @@ public class DirectoryWatcher {
         });
 
         System.out.println("DirectoryWatcher 启动完成（使用 IntelliJ VirtualFileManager）");
+    }
+
+
+    @Nullable
+    private VirtualFile extractFileFromEvent(VFileEvent event) {
+        if (event instanceof VFileContentChangeEvent) {
+            return ((VFileContentChangeEvent) event).getFile();
+        } else if (event instanceof VFileCreateEvent) {
+            return ((VFileCreateEvent) event).getFile();
+        } else if (event instanceof VFileDeleteEvent) {
+            return ((VFileDeleteEvent) event).getFile();
+        } else if (event instanceof VFileMoveEvent) {
+            return ((VFileMoveEvent) event).getFile();
+        } else if (event instanceof VFilePropertyChangeEvent) {
+            VFilePropertyChangeEvent e = (VFilePropertyChangeEvent) event;
+            // 这里只处理 name 属性的变化（重命名）
+            if ("name".equals(e.getPropertyName())) {
+                return e.getFile();
+            }
+        }
+        return null;
     }
 
     public void stop() {
