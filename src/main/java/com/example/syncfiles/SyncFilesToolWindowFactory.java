@@ -28,7 +28,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
     @Override
     public void createToolWindowContent(Project project, ToolWindow toolWindow) {
         this.project = project;
-        Util.InitToolWindowFactory(project, this);
+
         JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
         mainPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
@@ -60,10 +60,19 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
 
         refreshScriptButtons(project, true, true);
         toolWindow.getComponent().add(mainPanel);
+        try {
+            Util.InitToolWindowFactory(project, this);
+            Util.refreshAndSetWatchDir(project);
+        } catch (IOException e) {
+            throw new RuntimeException(e);
+        }
     }
 
     public void refreshScriptButtons(Project project, String scriptPath, String pythonExe, boolean internel, boolean selfInit) {
+        System.out.println("refreshScriptButtons");
         scriptButtonPanel.removeAll();
+        scriptButtonPanel.revalidate();
+        scriptButtonPanel.repaint();
         if (scriptPath == null) {
             SyncFilesConfig config = SyncFilesConfig.getInstance(project);
             scriptPath = config.getPythonScriptPath();
@@ -85,7 +94,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
             JOptionPane.showMessageDialog(null, "Python可执行文件错误: ", "错误", JOptionPane.ERROR_MESSAGE);
             return;
         }
-
+        scriptButtonPanel.removeAll();
         if (scriptPath != null && !scriptPath.isEmpty()) {
             try (Stream<Path> paths = Files.walk(Paths.get(scriptPath))) {
                 String finalPythonExe = pythonExe;
@@ -93,7 +102,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
                         .filter(path -> path.toString().endsWith(".py"))
                         .forEach(path -> {
                             File file = path.toFile();
-                            JButton button = new JButton(file.getName());
+                            JButton button = new JButton(file.getName().replaceFirst("\\.py$", ""));
                             button.setAlignmentX(Component.LEFT_ALIGNMENT);
                             button.setMaximumSize(new Dimension(Integer.MAX_VALUE, button.getPreferredSize().height));
                             button.addActionListener(e -> executePythonScript(finalPythonExe, file.getAbsolutePath()));

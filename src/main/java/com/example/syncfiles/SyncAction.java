@@ -74,7 +74,7 @@ public class SyncAction extends AnAction {
                             );
                         }
                     }
-                    Util.refreshAndSetWatchDir(project, null, null);
+                    Util.refreshAndSetWatchDir(project);
                     Util.refreshAllFiles(project);
                 } catch (Exception ex) {
                     ApplicationManager.getApplication().invokeLater(() -> {

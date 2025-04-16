@@ -1,18 +1,16 @@
 package com.example.syncfiles;
 
-import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 
-import javax.swing.*;
 import java.io.IOException;
 import java.nio.file.Paths;
 import java.util.Objects;
 
 public class Util {
-    public static void refreshAndSetWatchDir(Project project, String scriptPath, String pythonExe) throws IOException {
+    public static void refreshAndSetWatchDir(Project project) throws IOException {
         if (SyncAction.directoryWatcher == null)
         {
             SyncAction.directoryWatcher = new DirectoryWatcher(project);
@@ -31,10 +29,10 @@ public class Util {
 //                System.err.println("无法监控目录: " + relativePath + ", 错误: " + e.getMessage());
 //            }
 //        }
-        SyncAction.directoryWatcher.watchDirectory(Paths.get(config.getPythonScriptPath()));
 
+        SyncAction.directoryWatcher.watchDirectory(Paths.get(config.getPythonScriptPath()));
         SyncAction.directoryWatcher.startWatching();
-        SyncAction.directoryWatcher.refreshButtons(scriptPath,pythonExe);
+        SyncAction.directoryWatcher.refreshButtons(config.getPythonScriptPath(),config.getPythonExecutablePath());
 
     }
 
@@ -52,12 +50,7 @@ public class Util {
 
     {
         if (SyncAction.directoryWatcher == null) {
-            try {
-                SyncAction.directoryWatcher = new DirectoryWatcher(project);
-            } catch (IOException e) {
-                JOptionPane.showMessageDialog(null, "配置文件中目录不存在: ", "错误", JOptionPane.ERROR_MESSAGE);
-                System.err.println(e.getMessage());
-            }
+            SyncAction.directoryWatcher = new DirectoryWatcher(project);
         }
         SyncAction.directoryWatcher.setSyncFilesToolWindowFactory(syncFilesToolWindowFactory);
     }

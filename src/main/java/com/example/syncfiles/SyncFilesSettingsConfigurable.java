@@ -185,7 +185,7 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         config.setPythonExecutablePath(pythonExecutablePathField.getText().trim());
 
         try {
-            Util.refreshAndSetWatchDir(project, null, null);
+            Util.refreshAndSetWatchDir(project);
             Util.refreshAllFiles(project);
         } catch (IOException e) {
             throw new ConfigurationException("刷新目录失败: " + e.getMessage());
