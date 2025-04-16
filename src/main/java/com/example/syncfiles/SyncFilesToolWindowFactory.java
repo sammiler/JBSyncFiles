@@ -28,7 +28,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
     @Override
     public void createToolWindowContent(Project project, ToolWindow toolWindow) {
         this.project = project;
-
+        Util.initToolWindowFactory(project, this);
         JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
         mainPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
 
@@ -61,7 +61,6 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
         refreshScriptButtons(project, true, true);
         toolWindow.getComponent().add(mainPanel);
         try {
-            Util.InitToolWindowFactory(project, this);
             Util.refreshAndSetWatchDir(project);
         } catch (IOException e) {
             throw new RuntimeException(e);

@@ -18,7 +18,6 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class DirectoryWatcher {
     private final Project project;
-    private SyncFilesToolWindowFactory syncFilesToolWindowFactory;
     private final Set<String> watchedDirectories = ConcurrentHashMap.newKeySet(); // 保存绝对路径字符串
     private MessageBusConnection connection;
     private boolean running = false;
@@ -38,7 +37,9 @@ public class DirectoryWatcher {
     }
 
     public void refreshButtons(String scriptPath, String pythonPath) throws IOException {
-        syncFilesToolWindowFactory.refreshScriptButtons(project, scriptPath, pythonPath, false, false);
+        SyncFilesToolWindowFactory factory = Util.getOrInitFactory(project);
+        if (factory == null) return;
+        factory.refreshScriptButtons(project, scriptPath, pythonPath, false, false);
     }
 
     public void startWatching() {
@@ -72,7 +73,9 @@ public class DirectoryWatcher {
                         System.out.println("Python文件变动: " + filePath);
                             ApplicationManager.getApplication().invokeLater(() -> {
                                     System.out.println("ApplicationManager.getApplication().invokeLater");
-                                    syncFilesToolWindowFactory.refreshScriptButtons(project, false, false);
+                                    SyncFilesToolWindowFactory factory = Util.getOrInitFactory(project);
+                                    if (factory != null)
+                                            factory.refreshScriptButtons(project, false, false);
                                 }
                             );
                     }
@@ -95,9 +98,7 @@ public class DirectoryWatcher {
         System.out.println("DirectoryWatcher 停止监听");
     }
 
-    public void setSyncFilesToolWindowFactory(SyncFilesToolWindowFactory factory) {
-        this.syncFilesToolWindowFactory = factory;
-    }
+
 
     public boolean isRunning() {
         return running;
