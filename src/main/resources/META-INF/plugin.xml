@@ -4,7 +4,6 @@
     <version>3.3.0</version>
     <vendor email="sammilergood@gmail.com" url="https://cplusplusbug.org">sammiler</vendor>
 
-    <!-- ↓↓↓ 使用纯英文描述以满足 Marketplace 要求 ↓↓↓ -->
     <description><![CDATA[
     <b>SyncFiles</b> is a lightweight plugin for IntelliJ IDEA (and compatible IDEs like CLion) designed to simplify syncing files and directories from GitHub repositories to your local project.<br/>
     Whether pulling code snippets, templates, or entire folders, SyncFiles streamlines the process with a user-friendly interface and customizable settings.<br/>
@@ -27,7 +26,7 @@
 
     <!-- 更新日志 (可以保留中文，但英文更佳) -->
     <change-notes><![CDATA[
-    <b>Version 3.2.0</b>
+    <b>Version 3.3.0</b>
     <ul>
       <li>Fix: Resolved UI update confusion when opening multiple windows for the same project (by operating on window-specific UI components).</li>
       <li>Fix: Resolved configuration and directory monitoring conflicts when opening multiple IDE instances (different projects) using Project Scoping.</li>
@@ -35,12 +34,6 @@
       <li>Improvement: Enhanced error handling and progress display during file/directory synchronization.</li>
       <li>Improvement: Used `backgroundPostStartupActivity` for startup initialization on a background thread to avoid blocking the UI.</li>
       <li>Improvement: Optimized settings UI experience and input validation.</li>
-    </ul>
-    <b>Version 3.1.0 and earlier</b>
-    <ul>
-      <li>Initial release with GitHub file and directory sync support.</li>
-      <li>Added local Python script execution and directory monitoring features.</li>
-      <li>Fixed configuration initialization and shortcut-related issues in earlier versions.</li>
     </ul>
     ]]></change-notes>
 

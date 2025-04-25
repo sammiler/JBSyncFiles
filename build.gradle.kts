@@ -44,20 +44,11 @@ intellijPlatform {
         name = "SyncFiles"
         id = "syncfiles"
         version = project.version.toString()
-        description = "A lightweight plugin..." // 你的英文描述
-        changeNotes = """
-            <b>Version 3.3.0 (Snapshot for 2025.1)</b>
-            <ul><li>Targeting IntelliJ Platform 2025.1 EAP.</li></ul>
-            """.trimIndent() // 你的更新日志
 
-        vendor {
-            name = "sammiler"
-            email = "sammilergood@gmail.com"
-            url = "https://cplusplusbug.org"
-        }
 
         ideaVersion {
             sinceBuild = "241" // 或 "243" 根据你的需求
+            untilBuild = "251.*"
             // untilBuild = "251.*" // 可省略
         }
     }
@@ -72,7 +63,9 @@ tasks {
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
         kotlinOptions.jvmTarget = "21"
     }
-
+    publishPlugin {
+        token.set(System.getenv("PUBLISH_TOKEN"))
+    }
     // runPluginVerifier { ... }
     // publishPlugin { ... }
 }
