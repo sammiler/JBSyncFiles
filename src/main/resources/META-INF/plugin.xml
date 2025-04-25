@@ -1,5 +1,5 @@
 <idea-plugin>
-    <id>com.example.syncfiles</id> <!-- 推荐使用公司或个人域名反转作为前缀，避免冲突 -->
+    <id>syncfiles</id> <!-- 推荐使用公司或个人域名反转作为前缀，避免冲突 -->
     <name>SyncFiles</name>
     <!-- 更新到新版本号 -->
     <version>3.2.0</version>
@@ -61,7 +61,7 @@
                     factoryClass="com.example.syncfiles.SyncFilesToolWindowFactory"/> <!-- 添加了一个图标 -->
         <!-- 设置界面 -->
         <projectConfigurable id="com.example.syncfiles.SyncFilesSettings"
-                             displayName="SyncFiles Settings" parentId="tools"
+                             displayName="SyncFiles Settings"
         instance="com.example.syncfiles.SyncFilesSettingsConfigurable"/>
     </extensions>
 
