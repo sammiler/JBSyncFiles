@@ -17,51 +17,8 @@ import java.util.concurrent.ConcurrentHashMap;
 
 public class Util {
 
-    // Store factory instances per project - needed to call refreshScriptButtons on the correct UI instance
-    private static final ConcurrentHashMap<Project, SyncFilesToolWindowFactory> factoryMap = new ConcurrentHashMap<>();
 
-    /**
-     * Called by SyncFilesToolWindowFactory.createToolWindowContent to register itself.
-     */
-    public static void initToolWindowFactory(@NotNull Project project, @NotNull SyncFilesToolWindowFactory factory) {
-        System.out.println("Registering ToolWindowFactory for project: " + project.getName());
-        factoryMap.put(project, factory);
-    }
 
-    /**
-     * Gets the ToolWindowFactory instance for a specific project.
-     * This allows other components (like the settings apply) to trigger UI updates.
-     * Returns null if the tool window hasn't been created/registered yet for that project.
-     */
-    @Nullable // Can return null
-    public static SyncFilesToolWindowFactory getOrInitFactory(@NotNull Project project) {
-        SyncFilesToolWindowFactory factory = factoryMap.get(project);
-        // Removed the auto-initialization logic as it can be complex and might not always work.
-        // Rely on the tool window being opened by the user or the framework first.
-        // if (factory == null) {
-        //    System.out.println("ToolWindowFactory not found for project " + project.getName() + ", attempting lazy init (might not work).");
-        //    ToolWindow toolWindow = ToolWindowManager.getInstance(project).getToolWindow("SyncFiles"); // Use your ToolWindow ID
-        //    if (toolWindow != null) {
-        //        // Activating or getting content manager *might* trigger creation, but not guaranteed.
-        //        // toolWindow.activate(null); // Might bring window to front
-        //        toolWindow.getContentManager();
-        //        factory = factoryMap.get(project); // Check again
-        //    }
-        // }
-        if (factory == null) {
-            System.out.println("ToolWindowFactory instance for project " + project.getName() + " not yet available.");
-        }
-        return factory;
-    }
-
-    /**
-     * Called when a project is closed (e.g., via a ProjectManagerListener) to clean up the map.
-     * You would need to implement a ProjectManagerListener to call this.
-     */
-    public static void removeFactory(@NotNull Project project) {
-        System.out.println("Removing ToolWindowFactory for project: " + project.getName());
-        factoryMap.remove(project);
-    }
 
     // REMOVED: Watcher logic is now entirely within ProjectDirectoryWatcherService
     // public static void refreshAndSetWatchDir(Project project) throws IOException { ... }

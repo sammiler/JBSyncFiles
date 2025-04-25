@@ -42,7 +42,6 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
     @Override
     public void createToolWindowContent(@NotNull Project project, @NotNull ToolWindow toolWindow) {
         // Store this instance in the Util map so it can be found later for updates
-        Util.initToolWindowFactory(project, this);
 
         JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
         mainPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
@@ -76,6 +75,34 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
         scrollPane.setVerticalScrollBarPolicy(JBScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
         scrollPane.setHorizontalScrollBarPolicy(JBScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         mainPanel.add(scrollPane, BorderLayout.CENTER);
+
+        project.getMessageBus().connect(toolWindow.getDisposable()).subscribe(SyncFilesNotifier.TOPIC, new SyncFilesNotifier() {
+            // 获取当前 Factory 实例的引用用于 Lambda
+            final SyncFilesToolWindowFactory currentFactory = SyncFilesToolWindowFactory.this;
+            final Project currentProject = project; // 捕获 project
+            final int factoryHashCode = currentFactory.hashCode();
+
+            @Override
+            public void configurationChanged() {
+                System.out.println("[" + currentProject.getName() + "][Factory@" + factoryHashCode + "] Received configurationChanged notification. Refreshing buttons.");
+                // 收到配置变更通知，刷新按钮（可以根据需要决定是否真的刷新）
+                // 注意：确保 refreshScriptButtons 是线程安全的或在 EDT 上调用
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    currentFactory.refreshScriptButtons(currentProject, false, false);
+                });
+            }
+
+            @Override
+            public void scriptsChanged() {
+                System.out.println("[" + currentProject.getName() + "][Factory@" + factoryHashCode + "] Received scriptsChanged notification. Refreshing buttons.");
+                // 收到脚本变更通知，刷新按钮
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    currentFactory.refreshScriptButtons(currentProject, false, false);
+                });
+            }
+        });
+
+
 
         // Initial population of script buttons
         // Pass false for internal/selfInit if called during initial creation
@@ -205,7 +232,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
                         if (currentExePath == null || currentExePath.isEmpty() || !Files.isRegularFile(Paths.get(currentExePath))) {
                             Messages.showErrorDialog(project, "Python executable path is not configured or invalid. Cannot run script.", "Execution Error");
                             // Optionally refresh buttons again to disable them
-                            refreshScriptButtons(project, true, false);
+                            refreshScriptButtons(project, false, false);
                             return;
                         }
                         executePythonScript(project, currentExePath, pyFilePath.toAbsolutePath().toString());

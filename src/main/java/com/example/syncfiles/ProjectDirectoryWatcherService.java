@@ -139,19 +139,21 @@ public class ProjectDirectoryWatcherService implements Disposable {
                     }
                 }
 
-                // If any relevant change was detected, schedule a refresh on the EDT
+                // ProjectDirectoryWatcherService.java - in the invokeLater block after refreshNeeded is true
                 if (refreshNeeded) {
                     ApplicationManager.getApplication().invokeLater(() -> {
-                        // Double check if still running before executing
-                        if (!running) return;
-                        System.out.println("[" + project.getName() + "] Invoking refreshScriptButtons via invokeLater.");
-                        SyncFilesToolWindowFactory factory = Util.getOrInitFactory(project);
-                        if (factory != null) {
-                            // Refresh buttons using current config (paths might have changed)
-                            factory.refreshScriptButtons(project, false, false);
-                        } else {
-                            System.err.println("[" + project.getName() + "] Could not find ToolWindowFactory to refresh buttons.");
-                        }
+                        if (!running) { /* ... */ return; }
+                        // 使用 Service 的 final project 字段
+
+                        // ★★★ 发布消息，而不是获取 Factory ★★★
+                        SyncFilesNotifier publisher = project.getMessageBus().syncPublisher(SyncFilesNotifier.TOPIC);
+                        publisher.scriptsChanged();
+
+                        // ---- 不再需要下面的代码 ----
+                        // SyncFilesToolWindowFactory factory = Util.getOrInitFactory(projectForRefresh);
+                        // if (factory != null) {
+                        //     factory.refreshScriptButtons(projectForRefresh, false, false);
+                        // } else { ... }
                     });
                 }
             }

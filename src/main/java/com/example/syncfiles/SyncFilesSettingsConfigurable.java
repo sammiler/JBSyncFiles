@@ -263,11 +263,19 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         }
 
         // Also refresh the ToolWindow UI immediately to reflect changes
-        SyncFilesToolWindowFactory factory = Util.getOrInitFactory(project);
-        if (factory != null) {
-            factory.refreshScriptButtons(project, false, false); // Refresh based on new config
-        }
 
+        System.out.println("[" + project.getName() + "][Settings] Publishing configurationChanged notification.");
+        SyncFilesNotifier publisher = project.getMessageBus().syncPublisher(SyncFilesNotifier.TOPIC);
+        publisher.configurationChanged();
+
+        // ---- 不再需要下面的代码 ----
+        // SyncFilesToolWindowFactory factory = Util.getOrInitFactory(project);
+        // if (factory != null) {
+        //    factory.refreshScriptButtons(project, false, false);
+        // }
+
+        updateOriginalState();
+        System.out.println("[" + project.getName() + "][Settings] Apply complete.");
 
         // Update original state after successful apply
         updateOriginalState();
