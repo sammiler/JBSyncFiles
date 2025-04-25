@@ -1,99 +1,115 @@
 package com.example.syncfiles;
 
+import com.intellij.openapi.application.ApplicationManager; // Needed for invokeLater
 import com.intellij.openapi.fileEditor.FileDocumentManager;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowManager;
+import org.jetbrains.annotations.NotNull;
+import org.jetbrains.annotations.Nullable; // Import Nullable
 
-import java.io.IOException;
+// import java.io.IOException; // No longer needed here
 import java.nio.file.Paths;
 import java.util.Objects;
 import java.util.concurrent.ConcurrentHashMap;
 
 public class Util {
 
-
-    // 存储每个项目对应的 ToolWindow 工厂实例
+    // Store factory instances per project - needed to call refreshScriptButtons on the correct UI instance
     private static final ConcurrentHashMap<Project, SyncFilesToolWindowFactory> factoryMap = new ConcurrentHashMap<>();
 
     /**
-     * 在 ToolWindowFactory.createToolWindowContent 中调用注册
+     * Called by SyncFilesToolWindowFactory.createToolWindowContent to register itself.
      */
-    public static void initToolWindowFactory(Project project, SyncFilesToolWindowFactory factory) {
+    public static void initToolWindowFactory(@NotNull Project project, @NotNull SyncFilesToolWindowFactory factory) {
+        System.out.println("Registering ToolWindowFactory for project: " + project.getName());
         factoryMap.put(project, factory);
     }
 
     /**
-     * 获取对应项目的工厂实例，如果未初始化则尝试触发初始化。
+     * Gets the ToolWindowFactory instance for a specific project.
+     * This allows other components (like the settings apply) to trigger UI updates.
+     * Returns null if the tool window hasn't been created/registered yet for that project.
      */
-    public static SyncFilesToolWindowFactory getOrInitFactory(Project project) {
+    @Nullable // Can return null
+    public static SyncFilesToolWindowFactory getOrInitFactory(@NotNull Project project) {
         SyncFilesToolWindowFactory factory = factoryMap.get(project);
+        // Removed the auto-initialization logic as it can be complex and might not always work.
+        // Rely on the tool window being opened by the user or the framework first.
+        // if (factory == null) {
+        //    System.out.println("ToolWindowFactory not found for project " + project.getName() + ", attempting lazy init (might not work).");
+        //    ToolWindow toolWindow = ToolWindowManager.getInstance(project).getToolWindow("SyncFiles"); // Use your ToolWindow ID
+        //    if (toolWindow != null) {
+        //        // Activating or getting content manager *might* trigger creation, but not guaranteed.
+        //        // toolWindow.activate(null); // Might bring window to front
+        //        toolWindow.getContentManager();
+        //        factory = factoryMap.get(project); // Check again
+        //    }
+        // }
         if (factory == null) {
-            // 尝试初始化 ToolWindow（懒加载机制）
-            ToolWindow toolWindow = ToolWindowManager.getInstance(project).getToolWindow("SyncFiles");
-            if (toolWindow != null) {
-                // 触发 ToolWindow 的 UI 初始化
-                toolWindow.getContentManager(); // 会触发 createToolWindowContent
-                // 再次尝试获取
-                factory = factoryMap.get(project);
-            }
+            System.out.println("ToolWindowFactory instance for project " + project.getName() + " not yet available.");
         }
         return factory;
     }
 
     /**
-     * 可选：清理（如果你在项目关闭时清理）
+     * Called when a project is closed (e.g., via a ProjectManagerListener) to clean up the map.
+     * You would need to implement a ProjectManagerListener to call this.
      */
-    public static void removeFactory(Project project) {
+    public static void removeFactory(@NotNull Project project) {
+        System.out.println("Removing ToolWindowFactory for project: " + project.getName());
         factoryMap.remove(project);
     }
 
-    public static void refreshAndSetWatchDir(Project project) throws IOException {
-        if (SyncAction.directoryWatcher == null)
-        {
-            SyncAction.directoryWatcher = new DirectoryWatcher(project);
-        }
-//        Path rootDir = Paths.get(Objects.requireNonNull(project.getBasePath()));
-        SyncFilesConfig config = SyncFilesConfig.getInstance(project);
+    // REMOVED: Watcher logic is now entirely within ProjectDirectoryWatcherService
+    // public static void refreshAndSetWatchDir(Project project) throws IOException { ... }
 
-//        for (Mapping mapping : config.getMappings()) {
-//            String relativePath = mapping.targetPath;
-//            try {
-//                // 拼接 rootDir 和相对路径，跨平台兼容
-//                Path dir = rootDir.resolve(relativePath);
-//                SyncAction.directoryWatcher.watchDirectory(dir);
-//                System.out.println("添加监控目录: " + dir);
-//            } catch (IOException e) {
-//                System.err.println("无法监控目录: " + relativePath + ", 错误: " + e.getMessage());
-//            }
-//        }
-
-        SyncAction.directoryWatcher.watchDirectory(Paths.get(config.getPythonScriptPath()));
-        SyncAction.directoryWatcher.startWatching();
-        SyncAction.directoryWatcher.refreshButtons(config.getPythonScriptPath(),config.getPythonExecutablePath());
-
+    /**
+     * Refreshes the Virtual File System for the entire project.
+     * Useful after external changes or downloads.
+     */
+    public static void refreshAllFiles(@NotNull Project project) {
+        ApplicationManager.getApplication().invokeLater(() -> {
+            ApplicationManager.getApplication().runWriteAction(() -> { // VFS refresh might need Write Action or just Read Action/EDT
+                String basePath = project.getBasePath();
+                if (basePath != null) {
+                    VirtualFile baseDir = LocalFileSystem.getInstance().findFileByPath(basePath);
+                    if (baseDir != null && baseDir.exists() && baseDir.isDirectory()) {
+                        System.out.println("[" + project.getName() + "] Refreshing VFS recursively from base path: " + basePath);
+                        // Asynchronous refresh (false = async, true = recursive)
+                        baseDir.refresh(false, true);
+                    } else {
+                        System.err.println("[" + project.getName() + "] Failed to find base directory for VFS refresh: " + basePath);
+                    }
+                } else {
+                    System.err.println("[" + project.getName() + "] Project base path is null, cannot refresh VFS.");
+                }
+            });
+        });
     }
 
-    public static void refreshAllFiles(Project project)
-    {
-        // 触发 IntelliJ 目录刷新
-        String basePath = project.getBasePath();
-        VirtualFile baseDir = LocalFileSystem.getInstance().findFileByPath(Objects.requireNonNull(basePath));
-        if (baseDir != null) {
-            baseDir.refresh(false, true);
-        }
-    }
+    /**
+     * Saves all documents and attempts to refresh a specific file path in the VFS.
+     * Useful before executing a script to ensure the latest version is used.
+     * @param filePath Absolute path to the file to refresh.
+     */
+    public static void forceRefreshVFS(@NotNull String filePath) {
+        ApplicationManager.getApplication().invokeAndWait(() -> { // Ensure save happens before refresh attempt
+            System.out.println("Saving all documents...");
+            FileDocumentManager.getInstance().saveAllDocuments();
 
-    public static void forceRefreshVFS(String scriptPath)
-    {
-        // 保存所有文件，确保脚本写入磁盘
-        FileDocumentManager.getInstance().saveAllDocuments();
-
-        // 刷新 VFS，确保 scriptPath 是最新
-        LocalFileSystem.getInstance().refreshAndFindFileByPath(scriptPath);
-        // 或者更强的刷新
-        // LocalFileSystem.getInstance().refreshFiles(Collections.singletonList(new File(scriptPath)), true, false, null);
+            System.out.println("Requesting VFS refresh for path: " + filePath);
+            // Synchronous refresh for a single file (null = modality state)
+            VirtualFile virtualFile = LocalFileSystem.getInstance().refreshAndFindFileByPath(filePath);
+            if (virtualFile != null) {
+                // Optionally force refresh again if needed
+                // virtualFile.refresh(false, false);
+                System.out.println("VFS refresh successful for: " + virtualFile.getPath());
+            } else {
+                System.err.println("VFS could not find file after refresh: " + filePath);
+            }
+        });
     }
 }

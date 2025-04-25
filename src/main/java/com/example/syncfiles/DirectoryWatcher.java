@@ -37,7 +37,7 @@ public class DirectoryWatcher {
     public void refreshButtons(String scriptPath, String pythonPath) throws IOException {
         SyncFilesToolWindowFactory factory = Util.getOrInitFactory(project);
         if (factory == null) return;
-        factory.refreshScriptButtons(project, scriptPath, pythonPath, false, false);
+        factory.refreshScriptButtons(project,  false, false);
     }
 
     public void startWatching() {
