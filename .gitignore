@@ -37,6 +37,7 @@ bin/
 
 ### VS Code ###
 .vscode/
+.intellijPlatform/
 
 ### Mac OS ###
 .DS_Store
