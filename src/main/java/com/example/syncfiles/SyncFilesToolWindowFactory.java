@@ -1,23 +1,20 @@
 package com.example.syncfiles;
 
 import com.intellij.openapi.application.ApplicationManager;
-import com.intellij.openapi.application.ReadAction; // Use ReadAction for VFS access if needed
 import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.progress.ProgressManager;
 import com.intellij.openapi.progress.Task;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.ui.Messages; // Keep using Messages
+import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBScrollPane;
-import com.intellij.openapi.vfs.VirtualFile; // For VFS operations
 import com.intellij.util.ui.JBUI;
-import groovyjarjarantlr4.v4.runtime.misc.NotNull;
+import org.jetbrains.annotations.NotNull; // Correct NotNull import
 
 import javax.swing.*;
 import java.awt.*;
 import java.io.BufferedReader;
-// import java.io.File; // Less reliant on File, use Path/VirtualFile
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
@@ -32,243 +29,256 @@ import java.util.Map;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
-// Implement ToolWindowFactory directly
+/**
+ * Factory responsible for creating the SyncFiles tool window content.
+ * IMPORTANT: The factory instance itself might be shared across multiple windows
+ * of the same project. UI update logic must operate on window-specific components.
+ */
 public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolWindowFactory {
-    // No Project field needed if we pass it around correctly
-    // No watcher field needed
-    private JPanel scriptButtonPanel; // Keep panel reference for updates
 
+    // REMOVED: Do not store UI components as fields if the factory instance can be shared.
+    // private JPanel scriptButtonPanel;
 
     @Override
     public void createToolWindowContent(@NotNull Project project, @NotNull ToolWindow toolWindow) {
-        // Store this instance in the Util map so it can be found later for updates
+        String projectName = project.getName();
+        int factoryHashCode = System.identityHashCode(this);
+        System.out.println("[" + projectName + "][Factory@" + factoryHashCode + "] Creating tool window content for Project [Project@" + System.identityHashCode(project) + "], ToolWindow ID: " + toolWindow.getId());
 
+        // --- Create UI Components specific to *this* window instance ---
         JPanel mainPanel = new JPanel(new BorderLayout(10, 10));
-        mainPanel.setBorder(BorderFactory.createEmptyBorder(10, 10, 10, 10));
+        mainPanel.setBorder(JBUI.Borders.empty(10));
 
-        // Top Panel for Actions
         JPanel topPanel = new JPanel(new FlowLayout(FlowLayout.LEFT));
+
+        // Use a local variable for the script panel of this specific window.
+        JPanel windowScriptButtonPanel = new JPanel();
+        windowScriptButtonPanel.setLayout(new BoxLayout(windowScriptButtonPanel, BoxLayout.Y_AXIS));
+        windowScriptButtonPanel.setBorder(JBUI.Borders.empty(5));
+        int panelHashCode = System.identityHashCode(windowScriptButtonPanel);
+        System.out.println("[" + projectName + "][Factory@" + factoryHashCode + "] Created new script panel [Panel@" + panelHashCode + "]");
+
+        // Sync Button
         JButton syncButton = new JButton("Sync GitHub Files");
         syncButton.setToolTipText("Download files/directories based on mappings in Settings.");
-        syncButton.addActionListener(e -> {
-            // Directly call the SyncAction logic
-            new SyncAction().syncFiles(project);
-            // SyncAction shows progress, no need for extra dialog here
-        });
+        // Action listener uses the correct project context captured here.
+        syncButton.addActionListener(e -> new SyncAction().syncFiles(project));
         topPanel.add(syncButton);
 
+        // Refresh Button
         JButton refreshButton = new JButton("Refresh Scripts");
         refreshButton.setToolTipText("Reload Python scripts from the configured directory.");
-        refreshButton.addActionListener(e -> refreshScriptButtons(project, true, false));
+        // Capture references needed by the ActionListener lambda.
+        final Project capturedProject = project;
+        final JPanel capturedPanel = windowScriptButtonPanel; // Capture *this window's* panel
+        refreshButton.addActionListener(e -> {
+            System.out.println("[" + capturedProject.getName() + "][Factory@" + factoryHashCode + "][ActionListener] Refresh clicked. Updating panel [Panel@" + System.identityHashCode(capturedPanel) + "]");
+            // Call the update method, passing the specific panel for this window.
+            updateScriptButtonsPanel(capturedProject, capturedPanel, true);
+        });
         topPanel.add(refreshButton);
 
         mainPanel.add(topPanel, BorderLayout.NORTH);
 
-        // Script Buttons Panel (Scrollable)
-        scriptButtonPanel = new JPanel();
-        // Use BoxLayout for vertical stacking
-        scriptButtonPanel.setLayout(new BoxLayout(scriptButtonPanel, BoxLayout.Y_AXIS));
-        // Add some padding inside the scroll pane's content
-        scriptButtonPanel.setBorder(JBUI.Borders.empty(5));
-
-        JBScrollPane scrollPane = new JBScrollPane(scriptButtonPanel);
+        // Scroll Pane containing this window's script panel
+        JBScrollPane scrollPane = new JBScrollPane(windowScriptButtonPanel);
         scrollPane.setVerticalScrollBarPolicy(JBScrollPane.VERTICAL_SCROLLBAR_AS_NEEDED);
         scrollPane.setHorizontalScrollBarPolicy(JBScrollPane.HORIZONTAL_SCROLLBAR_NEVER);
         mainPanel.add(scrollPane, BorderLayout.CENTER);
 
+        // --- Subscribe to Message Bus ---
+        // Capture references needed by the Message Bus listener lambda.
+        final Project capturedProjectForEvents = project;
+        final JPanel capturedPanelForEvents = windowScriptButtonPanel; // Capture *this window's* panel
         project.getMessageBus().connect(toolWindow.getDisposable()).subscribe(SyncFilesNotifier.TOPIC, new SyncFilesNotifier() {
-            // 获取当前 Factory 实例的引用用于 Lambda
-            final SyncFilesToolWindowFactory currentFactory = SyncFilesToolWindowFactory.this;
-            final Project currentProject = project; // 捕获 project
-            final int factoryHashCode = currentFactory.hashCode();
-
             @Override
             public void configurationChanged() {
-                System.out.println("[" + currentProject.getName() + "][Factory@" + factoryHashCode + "] Received configurationChanged notification. Refreshing buttons.");
-                // 收到配置变更通知，刷新按钮（可以根据需要决定是否真的刷新）
-                // 注意：确保 refreshScriptButtons 是线程安全的或在 EDT 上调用
+                int currentPanelHashCode = System.identityHashCode(capturedPanelForEvents);
+                System.out.println("[" + capturedProjectForEvents.getName() + "][Factory@" + factoryHashCode + "][MsgListener] Config changed. Updating panel [Panel@" + currentPanelHashCode + "]");
                 ApplicationManager.getApplication().invokeLater(() -> {
-                    currentFactory.refreshScriptButtons(currentProject, false, false);
+                    // Call the update method, passing the specific panel captured by this listener.
+                    updateScriptButtonsPanel(capturedProjectForEvents, capturedPanelForEvents, false);
                 });
             }
 
             @Override
             public void scriptsChanged() {
-                System.out.println("[" + currentProject.getName() + "][Factory@" + factoryHashCode + "] Received scriptsChanged notification. Refreshing buttons.");
-                // 收到脚本变更通知，刷新按钮
+                int currentPanelHashCode = System.identityHashCode(capturedPanelForEvents);
+                System.out.println("[" + capturedProjectForEvents.getName() + "][Factory@" + factoryHashCode + "][MsgListener] Scripts changed. Updating panel [Panel@" + currentPanelHashCode + "]");
                 ApplicationManager.getApplication().invokeLater(() -> {
-                    currentFactory.refreshScriptButtons(currentProject, false, false);
+                    // Call the update method, passing the specific panel captured by this listener.
+                    updateScriptButtonsPanel(capturedProjectForEvents, capturedPanelForEvents, false);
                 });
             }
         });
 
+        // --- Initial UI Population ---
+        // Call the update method for the first time for this window's panel.
+        updateScriptButtonsPanel(project, windowScriptButtonPanel, true);
 
-
-        // Initial population of script buttons
-        // Pass false for internal/selfInit if called during initial creation
-        refreshScriptButtons(project, false, true);
-
-        // Add the main panel to the tool window component
+        // Add the main panel (containing this window's specific components) to the tool window.
         toolWindow.getComponent().add(mainPanel);
-
-        // No need to interact with watcher here - it's handled by startup activity / settings apply
-        // try {
-        //    Util.refreshAndSetWatchDir(project); // REMOVED
-        // } catch (IOException e) {
-        //    Messages.showErrorDialog(project, "Failed to initialize directory watcher: " + e.getMessage(), "Initialization Error");
-        //}
+        System.out.println("[" + projectName + "][Factory@" + factoryHashCode + "] Finished createToolWindowContent for ToolWindow ID: " + toolWindow.getId());
     }
 
     /**
-     * Refreshes the buttons based on *.py files in the configured script path.
-     * @param project Current project
-     * @param triggeredByUser True if triggered by button click, false if automatic/initial.
-     * @param isInitialCall True if this is the very first call during tool window creation.
+     * Updates the script buttons displayed within a specific target JPanel.
+     * This method reads the current configuration and populates the provided panel.
+     *
+     * @param project         The current project context.
+     * @param targetPanel     The specific JPanel instance to update for a given tool window.
+     * @param isInitialCall   True if this is the first population during window creation.
      */
-    public void refreshScriptButtons(@NotNull Project project, boolean triggeredByUser, boolean isInitialCall) {
-        System.out.println("[" + project.getName() + "] Refreshing script buttons requested. User action: " + triggeredByUser);
+    private void updateScriptButtonsPanel(@NotNull Project project, @NotNull JPanel targetPanel, boolean isInitialCall) {
+        String projectName = project.getName();
+        int panelHashCode = System.identityHashCode(targetPanel);
+        System.out.println("[" + projectName + "][Updater] Updating script buttons for panel [Panel@" + panelHashCode + "]. Initial call: " + isInitialCall);
 
-        // Always clear existing buttons first
-        scriptButtonPanel.removeAll();
+        // Ensure UI updates happen on the EDT
+        if (!ApplicationManager.getApplication().isDispatchThread()) {
+            System.out.println("[" + projectName + "][Updater] Not on EDT, scheduling update for panel [Panel@" + panelHashCode + "]");
+            ApplicationManager.getApplication().invokeLater(() -> updateScriptButtonsPanel(project, targetPanel, isInitialCall));
+            return;
+        }
 
+        // 1. Clear the target panel
+        targetPanel.removeAll();
+
+        // 2. Get Configuration
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
+        if (config == null) {
+            System.err.println("[" + projectName + "][Updater] Failed to get SyncFilesConfig for panel [Panel@" + panelHashCode + "]");
+            targetPanel.add(new JBLabel("Error: Configuration service unavailable."));
+            targetPanel.revalidate();
+            targetPanel.repaint();
+            return;
+        }
         String scriptPathStr = config.getPythonScriptPath();
         String pythonExeStr = config.getPythonExecutablePath();
+        System.out.println("[" + projectName + "][Updater] Config for panel [Panel@" + panelHashCode + "]: ScriptPath='" + scriptPathStr + "', ExePath='" + pythonExeStr + "'");
 
-        // Validate paths before proceeding
+
+        // 3. Validate Paths
         Path scriptPath = null;
+        boolean scriptPathValid = false;
+
         if (scriptPathStr != null && !scriptPathStr.isEmpty()) {
             try {
-                scriptPath = Paths.get(scriptPathStr).normalize();
-                if (!Files.isDirectory(scriptPath) && triggeredByUser) {
-                    String message = "Configured Python Scripts Path is not a valid directory: " + scriptPathStr;
-                    System.err.println(message);
-                    if (triggeredByUser) { // Only show error dialog if user explicitly clicked refresh
-                        Messages.showErrorDialog(project, message, "Script Path Error");
-                    } else if (!isInitialCall) { // Show warning on subsequent auto-refreshes if path becomes invalid
-                        Messages.showWarningDialog(project, message, "Script Path Warning");
-                    }
-                    scriptPath = null; // Invalidate path
+                Path tempPath = Paths.get(scriptPathStr).normalize();
+                if (Files.isDirectory(tempPath)) {
+                    scriptPath = tempPath;
+                    scriptPathValid = true;
+                } else {
+                    // Log error but don't show dialog unless triggered by user action (handled elsewhere)
+                    System.err.println("[" + projectName + "][Updater] Configured script path is not a directory: " + scriptPathStr);
                 }
             } catch (InvalidPathException e) {
-                String message = "Invalid format for Python Scripts Path: " + scriptPathStr;
-                System.err.println(message);
-                if (triggeredByUser) Messages.showErrorDialog(project, message, "Script Path Error");
-                scriptPath = null; // Invalidate path
+                System.err.println("[" + projectName + "][Updater] Invalid script path format: " + scriptPathStr);
             }
         } else {
-            // Path is empty - this is valid, just means no scripts to show
-            System.out.println("[" + project.getName() + "] Python script path is empty. No scripts will be listed.");
-            if (triggeredByUser && !isInitialCall) { // Inform user on manual refresh if path is empty
-                Messages.showInfoMessage(project, "Python Scripts Directory is not configured in settings.", "Info");
-            }
+            System.out.println("[" + projectName + "][Updater] Script path is empty for panel [Panel@" + panelHashCode + "]");
         }
 
         Path pythonExePath = null;
+        boolean exePathValid = false;
         if (pythonExeStr != null && !pythonExeStr.isEmpty()) {
             try {
-                pythonExePath = Paths.get(pythonExeStr).normalize();
-                if (!Files.isRegularFile(pythonExePath) && triggeredByUser) {
-                    String message = "Configured Python Executable Path is not a valid file: " + pythonExeStr;
-                    System.err.println(message);
-                    // This is more critical - warn always if invalid (except initial silent load)
-                    if (triggeredByUser || !isInitialCall) Messages.showWarningDialog(project, message, "Python Executable Warning");
-                    pythonExePath = null; // Invalidate
+                Path tempPath = Paths.get(pythonExeStr).normalize();
+                if (Files.isRegularFile(tempPath)) {
+                    pythonExePath = tempPath;
+                    exePathValid = true;
+                } else {
+                    System.err.println("[" + projectName + "][Updater] Configured python executable is not a file: " + pythonExeStr);
                 }
             } catch (InvalidPathException e) {
-                String message = "Invalid format for Python Executable Path: " + pythonExeStr;
-                System.err.println(message);
-                if (triggeredByUser || !isInitialCall) Messages.showWarningDialog(project, message, "Python Executable Error");
-                pythonExePath = null; // Invalidate
+                System.err.println("[" + projectName + "][Updater] Invalid python executable path format: " + pythonExeStr);
             }
         } else {
-            // Executable path is empty - scripts cannot be run
-            System.out.println("[" + project.getName() + "] Python executable path is empty. Scripts cannot be executed.");
-            if (triggeredByUser && !isInitialCall && scriptPath != null) { // Only warn if scripts *could* be shown but not run
-                Messages.showWarningDialog(project, "Python Executable Path is not configured. Scripts cannot be run.", "Warning");
-            }
+            System.out.println("[" + projectName + "][Updater] Python executable path is empty for panel [Panel@" + panelHashCode + "]");
         }
 
-        // If script path is valid, find and add buttons
-        if (scriptPath != null) {
-            List<Path> pythonFiles = new ArrayList<>();
-            try (Stream<Path> paths = Files.list(scriptPath)) { // Use Files.list for non-recursive listing
+
+        // 4. Find Python Script Files
+        List<Path> pythonFiles = new ArrayList<>();
+        if (scriptPathValid) {
+            try (Stream<Path> paths = Files.list(scriptPath)) {
                 pythonFiles = paths
                         .filter(Files::isRegularFile)
                         .filter(path -> path.getFileName().toString().toLowerCase().endsWith(".py"))
-                        .sorted(Comparator.comparing(path -> path.getFileName().toString().toLowerCase())) // Sort alphabetically
+                        .sorted(Comparator.comparing(path -> path.getFileName().toString().toLowerCase()))
                         .collect(Collectors.toList());
+                System.out.println("[" + projectName + "][Updater] Found " + pythonFiles.size() + " python files in " + scriptPath + " for panel [Panel@" + panelHashCode + "]");
             } catch (IOException e) {
-                String message = "Error reading Python scripts directory: " + scriptPathStr + "\n" + e.getMessage();
-                System.err.println(message);
-                if (triggeredByUser && !isInitialCall) { // Show error if not initial silent load
-                    Messages.showErrorDialog(project, message, "Error Loading Scripts");
-                }
+                System.err.println("[" + projectName + "][Updater] Error reading script directory " + scriptPath + " for panel [Panel@" + panelHashCode + "]: " + e.getMessage());
+                targetPanel.add(new JBLabel("Error reading script directory."));
+                // Show limited error in UI, full error logged
             }
-
-            if (pythonFiles.isEmpty()) {
-                if (scriptPath != null) { // Only add label if path itself was valid
-                    JBLabel noScriptsLabel = new JBLabel("No *.py scripts found in " + scriptPath.getFileName());
-                    noScriptsLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-                    scriptButtonPanel.add(noScriptsLabel);
-                }
-            } else {
-                final Path finalPythonExePath = pythonExePath; // Effectively final for lambda
-                boolean canExecute = finalPythonExePath != null;
-
-                for (Path pyFilePath : pythonFiles) {
-                    String buttonText = pyFilePath.getFileName().toString().replaceFirst("(?i)\\.py$", ""); // Case-insensitive remove .py
-                    JButton button = new JButton(buttonText);
-                    button.setToolTipText("Run " + pyFilePath.getFileName() + (canExecute ? "" : " (Configure Python executable path first!)"));
-                    button.setAlignmentX(Component.LEFT_ALIGNMENT);
-                    // Ensure buttons don't stretch wider than the panel
-                    button.setMaximumSize(new Dimension(Integer.MAX_VALUE, button.getPreferredSize().height));
-                    button.setEnabled(canExecute); // Disable button if Python exe is not set
-
-                    button.addActionListener(e -> {
-                        // Re-check executable path just before running
-                        SyncFilesConfig currentConfig = SyncFilesConfig.getInstance(project);
-                        String currentExePath = currentConfig.getPythonExecutablePath();
-                        if (currentExePath == null || currentExePath.isEmpty() || !Files.isRegularFile(Paths.get(currentExePath))) {
-                            Messages.showErrorDialog(project, "Python executable path is not configured or invalid. Cannot run script.", "Execution Error");
-                            // Optionally refresh buttons again to disable them
-                            refreshScriptButtons(project, false, false);
-                            return;
-                        }
-                        executePythonScript(project, currentExePath, pyFilePath.toAbsolutePath().toString());
-                    });
-                    scriptButtonPanel.add(button);
-                    scriptButtonPanel.add(Box.createVerticalStrut(5)); // Add spacing between buttons
-                }
-            }
-        } else if (!triggeredByUser && isInitialCall) {
-            // Initial call and path is invalid/empty, show placeholder
-            JBLabel configureLabel = new JBLabel("Configure Python script/executable paths in Settings.");
-            configureLabel.setAlignmentX(Component.LEFT_ALIGNMENT);
-            scriptButtonPanel.add(configureLabel);
         }
 
+        // 5. Populate the target panel
+        if (!scriptPathValid) {
+            if (isInitialCall || !scriptPathStr.isEmpty()) { // Show message if path was configured but invalid, or on first load
+                targetPanel.add(new JBLabel("Configure a valid Python script directory in Settings."));
+            }
+        } else if (pythonFiles.isEmpty()) {
+            // Valid directory, but no scripts found
+            targetPanel.add(new JBLabel("No *.py scripts found in " + scriptPath.getFileName()));
+        } else {
+            // Valid directory with scripts
+            final Path finalPythonExePath = pythonExePath; // Final for lambda
+            boolean canExecute = exePathValid;
 
-        // Redraw the panel
-        scriptButtonPanel.revalidate();
-        scriptButtonPanel.repaint();
-        System.out.println("[" + project.getName() + "] Script buttons refresh complete.");
+            for (Path pyFilePath : pythonFiles) {
+                String buttonText = pyFilePath.getFileName().toString().replaceFirst("(?i)\\.py$", "");
+                JButton button = new JButton(buttonText);
+                button.setToolTipText("Run " + pyFilePath.getFileName() + (canExecute ? "" : " (Configure Python executable path first!)"));
+                button.setAlignmentX(Component.LEFT_ALIGNMENT);
+                button.setMaximumSize(new Dimension(Integer.MAX_VALUE, button.getPreferredSize().height));
+                button.setEnabled(canExecute);
+
+                // Capture necessary variables for the script execution action listener
+                final String scriptToExecute = pyFilePath.toAbsolutePath().toString();
+                final String exeToUse = canExecute ? finalPythonExePath.toString() : null;
+
+                button.addActionListener(e -> {
+                    if (exeToUse == null) {
+                        // Re-check just in case config changed without UI refresh (unlikely but safe)
+                        SyncFilesConfig currentConfig = SyncFilesConfig.getInstance(project);
+                        String currentExe = currentConfig.getPythonExecutablePath();
+                        if (currentExe == null || currentExe.isEmpty() || !Files.isRegularFile(Paths.get(currentExe))) {
+                            Messages.showErrorDialog(project, "Python executable path is not configured or invalid.", "Execution Error");
+                            return;
+                        }
+                        // If valid now, proceed (though button should ideally be enabled)
+                        executePythonScript(project, currentExe, scriptToExecute);
+                    } else {
+                        executePythonScript(project, exeToUse, scriptToExecute);
+                    }
+                });
+                targetPanel.add(button); // Add button to the target panel
+                targetPanel.add(Box.createVerticalStrut(5));
+            }
+        }
+
+        // 6. Redraw the target panel
+        targetPanel.revalidate();
+        targetPanel.repaint();
+        System.out.println("[" + projectName + "][Updater] Finished updating panel [Panel@" + panelHashCode + "]");
     }
 
 
-    // No longer needs scriptPath/pythonExe parameters, reads from config inside if needed
-    public void refreshScriptButtons(@NotNull Project project, boolean triggeredByUser) {
-        refreshScriptButtons(project, triggeredByUser, false); // Not initial call
-    }
-
-
-    // Renamed method for clarity
+    /**
+     * Executes the specified Python script in a background task.
+     * Reads configuration for environment variables.
+     *
+     * @param project          The current project context.
+     * @param pythonExecutable The absolute path to the Python executable.
+     * @param scriptPath       The absolute path to the Python script to execute.
+     */
     private void executePythonScript(@NotNull Project project, @NotNull String pythonExecutable, @NotNull String scriptPath) {
-        System.out.println("[" + project.getName() + "] Executing Python script: " + scriptPath);
-        System.out.println("Using Python executable: " + pythonExecutable);
-
-        // Refresh VFS for the specific script file just before execution? Maybe not needed if watcher works.
-        // Util.forceRefreshVFS(scriptPath);
+        String projectName = project.getName();
+        System.out.println("[" + projectName + "] Preparing to execute Python script: " + scriptPath);
+        System.out.println("[" + projectName + "] Using Python executable: " + pythonExecutable);
 
         ProgressManager.getInstance().run(new Task.Backgroundable(project, "Running Python Script: " + Paths.get(scriptPath).getFileName(), true) {
             @Override
@@ -277,56 +287,48 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
                 indicator.setText("Executing " + Paths.get(scriptPath).getFileName());
 
                 try {
+                    // Ensure the script file is synced to disk before execution
                     Util.forceRefreshVFS(scriptPath);
+
                     ProcessBuilder pb = new ProcessBuilder(pythonExecutable, scriptPath);
 
-                    // Set working directory (optional, defaults to IDE process CWD)
-                    // Path scriptDir = Paths.get(scriptPath).getParent();
-                    // if (scriptDir != null) pb.directory(scriptDir.toFile());
-
-                    // Get environment variables from config
+                    // Set Environment Variables from Project Config
                     SyncFilesConfig config = SyncFilesConfig.getInstance(project);
-                    Map<String, String> envVars = config.getEnvVariables(); // Reads a copy
-                    if (envVars.isEmpty())
-                    {
-                        envVars = SyncFilesSettingsConfigurable.applyEnvVars;
+                    if (config == null) {
+                        System.err.println("[" + projectName + "] Failed to get SyncFilesConfig for environment variables.");
+                        // Decide: proceed without config env vars or throw error?
+                        // Let's proceed for now, logging the error.
+                    } else {
+                        Map<String, String> envVars = config.getEnvVariables(); // Reads a copy
+                        if (!envVars.isEmpty()) {
+                            Map<String, String> processEnv = pb.environment();
+                            processEnv.putAll(envVars);
+                            System.out.println("[" + projectName + "] Added environment variables from config: " + envVars.keySet());
+                        } else {
+                            System.out.println("[" + projectName + "] No environment variables configured in settings.");
+                        }
                     }
-                    if (!envVars.isEmpty()) {
-                        Map<String, String> processEnv = pb.environment();
-                        // Add configured vars, potentially overriding system vars
-                        processEnv.putAll(envVars);
-                        System.out.println("[" + project.getName() + "] Added environment variables: " + envVars.keySet());
-                    }
+                    // REMOVED problematic static fallback:
+                    // if (envVars.isEmpty()) { envVars = SyncFilesSettingsConfigurable.applyEnvVars; }
+
                     // Force UTF-8 for Python I/O
                     pb.environment().put("PYTHONIOENCODING", "UTF-8");
 
                     // Start the process
                     Process process = pb.start();
 
-                    // Capture output streams using UTF-8
+                    // Capture output streams using UTF-8 (unchanged logic)
                     StringBuilder output = new StringBuilder();
                     StringBuilder errorOutput = new StringBuilder();
-                    Thread outputReaderThread = new Thread(() -> {
+                    Thread outputReaderThread = new Thread(() -> { /* ... stream reading ... */
                         try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
-                            String line;
-                            while ((line = reader.readLine()) != null) {
-                                output.append(line).append("\n");
-                                // Update progress indicator text incrementally?
-                                // ApplicationManager.getApplication().invokeLater(() -> indicator.setText2(line));
-                            }
-                        } catch (IOException e) {
-                            System.err.println("[" + project.getName() + "] Error reading script stdout: " + e.getMessage());
-                        }
+                            String line; while ((line = reader.readLine()) != null) output.append(line).append("\n");
+                        } catch (IOException e) { System.err.println("[" + projectName + "] Error reading script stdout: " + e.getMessage());}
                     });
-                    Thread errorReaderThread = new Thread(() -> {
+                    Thread errorReaderThread = new Thread(() -> { /* ... stream reading ... */
                         try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
-                            String line;
-                            while ((line = reader.readLine()) != null) {
-                                errorOutput.append(line).append("\n");
-                            }
-                        } catch (IOException e) {
-                            System.err.println("[" + project.getName() + "] Error reading script stderr: " + e.getMessage());
-                        }
+                            String line; while ((line = reader.readLine()) != null) errorOutput.append(line).append("\n");
+                        } catch (IOException e) { System.err.println("[" + projectName + "] Error reading script stderr: " + e.getMessage());}
                     });
 
                     outputReaderThread.start();
@@ -342,35 +344,27 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
                     final String finalOutput = output.toString().trim();
                     final String finalError = errorOutput.toString().trim();
 
-                    // Show result dialog on EDT
-                    ApplicationManager.getApplication().invokeLater(() -> {
+                    // Show result dialog on EDT (unchanged logic)
+                    ApplicationManager.getApplication().invokeLater(() -> { /* ... show success/error dialog ... */
                         if (exitCode == 0) {
                             String message = "Script executed successfully!\n\nOutput:\n" + (finalOutput.isEmpty() ? "<No Output>" : finalOutput);
-                            // Optionally show stderr even on success if it's not empty
-                            if (!finalError.isEmpty()) {
-                                message += "\n\nStandard Error:\n" + finalError;
-                            }
+                            if (!finalError.isEmpty()) message += "\n\nStandard Error:\n" + finalError;
                             Messages.showInfoMessage(project, message, "Script Success: " + Paths.get(scriptPath).getFileName());
                         } else {
                             String message = "Script execution failed! (Exit Code: " + exitCode + ")\n\n";
-                            if (!finalOutput.isEmpty()) {
-                                message += "Standard Output:\n" + finalOutput + "\n\n";
-                            }
-                            if (!finalError.isEmpty()) {
-                                message += "Standard Error:\n" + finalError;
-                            } else {
-                                message += "Standard Error: <No Error Output>";
-                            }
+                            if (!finalOutput.isEmpty()) message += "Standard Output:\n" + finalOutput + "\n\n";
+                            if (!finalError.isEmpty()) message += "Standard Error:\n" + finalError;
+                            else message += "Standard Error: <No Error Output>";
                             Messages.showErrorDialog(project, message, "Script Failure: " + Paths.get(scriptPath).getFileName());
                         }
-                        // Refresh VFS after execution in case the script modified files
-                        Util.refreshAllFiles(project);
+                        Util.refreshAllFiles(project); // Refresh VFS after execution
                     });
 
                 } catch (IOException | InterruptedException e) {
-                    System.err.println("[" + project.getName() + "] Failed to execute script: " + e.getMessage());
+                    System.err.println("[" + projectName + "] Failed to execute script '" + scriptPath + "': " + e.getMessage());
+                    // Show error dialog on EDT
                     ApplicationManager.getApplication().invokeLater(() ->
-                            Messages.showErrorDialog(project, "Failed to execute script: " + scriptPath + "\nError: " + e.getMessage(), "Execution Error")
+                            Messages.showErrorDialog(project, "Failed to start script: " + Paths.get(scriptPath).getFileName() + "\nError: " + e.getMessage(), "Execution Error")
                     );
                 }
             }
