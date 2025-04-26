@@ -19,10 +19,9 @@ import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.HashMap;
+import java.util.*;
 import java.util.List;
-import java.util.Map;
+
 import org.jetbrains.annotations.NotNull; // Ensure correct NotNull import
 
 public class SyncFilesSettingsConfigurable implements Configurable {
@@ -53,11 +52,31 @@ public class SyncFilesSettingsConfigurable implements Configurable {
     @Override
     public JComponent createComponent() {
         // --- Mappings Table Setup (unchanged) ---
-        mappingsTableModel = new DefaultTableModel(new Object[]{"Source URL", "Target Path"}, 0) {/* ... */};
+        mappingsTableModel = new DefaultTableModel(new Object[]{"Source URL", "Target Path"}, 0) {
+            @Override
+            public boolean isCellEditable(int row, int column) {
+                return true; // 允许编辑
+            }
+        };
         mappingsTable = new JBTable(mappingsTableModel);
         JPanel mappingsPanel = ToolbarDecorator.createDecorator(mappingsTable)
                 .setAddAction(button -> mappingsTableModel.addRow(new String[]{"", ""}))
-                .setRemoveAction(button -> {/* ... */})
+                .setRemoveAction(button -> {
+                    // 获取选中的视图行索引
+                    int[] selectedRows = mappingsTable.getSelectedRows();
+                    if (selectedRows.length == 0) {
+                        return; // 没有选中行，直接返回
+                    }
+                    // 对选中的行索引进行排序（升序），以便我们从后往前删除
+                    Arrays.sort(selectedRows);
+                    // 从后往前遍历选中的行索引
+                    for (int i = selectedRows.length - 1; i >= 0; i--) {
+                        // 将视图索引转换为模型索引 (重要！以防表格排序或过滤)
+                        int modelRow = mappingsTable.convertRowIndexToModel(selectedRows[i]);
+                        // 从 TableModel 中删除行
+                        mappingsTableModel.removeRow(modelRow);
+                    }
+                })
                 .setPreferredSize(new Dimension(500, 150))
                 .createPanel();
 
@@ -66,7 +85,22 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         envVarsTable = new JBTable(envVarsTableModel);
         JPanel envVarsPanel = ToolbarDecorator.createDecorator(envVarsTable)
                 .setAddAction(button -> envVarsTableModel.addRow(new String[]{"", ""}))
-                .setRemoveAction(button -> {/* ... */})
+                .setRemoveAction(button -> {
+                    // 获取选中的视图行索引
+                    int[] selectedRows = envVarsTable.getSelectedRows();
+                    if (selectedRows.length == 0) {
+                        return; // 没有选中行，直接返回
+                    }
+                    // 对选中的行索引进行排序（升序），以便我们从后往前删除
+                    Arrays.sort(selectedRows);
+                    // 从后往前遍历选中的行索引
+                    for (int i = selectedRows.length - 1; i >= 0; i--) {
+                        // 将视图索引转换为模型索引 (重要！)
+                        int modelRow = envVarsTable.convertRowIndexToModel(selectedRows[i]);
+                        // 从 TableModel 中删除行
+                        envVarsTableModel.removeRow(modelRow);
+                    }
+                })
                 .setPreferredSize(new Dimension(500, 150))
                 .createPanel();
 
@@ -139,6 +173,14 @@ public class SyncFilesSettingsConfigurable implements Configurable {
 
     @Override
     public void apply() throws ConfigurationException {
+
+        // 确保停止单元格编辑，这样 getMappingsFromTable 能拿到最新的值
+        if (mappingsTable.isEditing()) {
+            mappingsTable.getCellEditor().stopCellEditing();
+        }
+        if (envVarsTable.isEditing()) {
+            envVarsTable.getCellEditor().stopCellEditing();
+        }
         String projectName = project.getName();
         System.out.println("[" + projectName + "][Settings] Applying settings...");
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);

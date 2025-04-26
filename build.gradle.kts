@@ -10,7 +10,7 @@ java {
     }
 }
 group = "com.example"
-version = "3.3-SNAPSHOT"
+version = "3.4-SNAPSHOT"
 
 repositories {
     mavenCentral()

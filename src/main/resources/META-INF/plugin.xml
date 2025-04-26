@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>syncfiles</id>
     <name>SyncFiles</name>
-    <version>3.3.0</version>
+    <version>3.4.0</version>
     <vendor email="sammilergood@gmail.com" url="https://cplusplusbug.org">sammiler</vendor>
 
     <description><![CDATA[
@@ -26,6 +26,10 @@
 
     <!-- 更新日志 (可以保留中文，但英文更佳) -->
     <change-notes><![CDATA[
+    <b>Version 3.4.0</b>
+    <ul>
+    <li>Fix: Fixed the non-functional remove ('-') button for the File Mappings and Environment Variables tables in the settings UI, allowing rows to be deleted.</li>
+    </ul>
     <b>Version 3.3.0</b>
     <ul>
       <li>Fix: Resolved UI update confusion when opening multiple windows for the same project (by operating on window-specific UI components).</li>
