@@ -29,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.text.SimpleDateFormat;
 import java.util.*;
 import java.util.List;
 import java.util.stream.Collectors;
@@ -234,21 +235,82 @@ public class SyncFilesSettingsConfigurable implements Configurable {
     // ... 在 SyncFilesSettingsConfigurable.java 的 apply() 方法中 ...
     @Override
     public void apply() throws ConfigurationException {
-        // ... (停止编辑和获取其他配置的代码保持不变) ...
-        SyncFilesConfig config = SyncFilesConfig.getInstance(project);
-        // ... (设置 mappings, envVars, pythonExecutablePath 的代码保持不变) ...
+        String projectName = project.getName();
+        LOG.info("[" + projectName + "][Settings] Attempting to apply settings...");
 
-        String scriptPathText = pythonScriptPathField.getText().trim();
-        // ... (scriptPathText 的校验逻辑保持不变) ...
+        // 确保在读取UI值之前，所有表格的编辑都已停止并提交到模型
+        if (mappingsTable.isEditing() && mappingsTable.getCellEditor() != null) mappingsTable.getCellEditor().stopCellEditing();
+        if (envVarsTable.isEditing() && envVarsTable.getCellEditor() != null) envVarsTable.getCellEditor().stopCellEditing();
+        if (watchEntriesTable.isEditing() && watchEntriesTable.getCellEditor() != null) watchEntriesTable.getCellEditor().stopCellEditing();
+
+        SyncFilesConfig config = SyncFilesConfig.getInstance(project);
+
+        // 1. 处理 Mappings
+        List<Mapping> mappingsFromUI = getMappingsFromTable();
+        for (int i = 0; i < mappingsFromUI.size(); i++) {
+            Mapping mapping = mappingsFromUI.get(i);
+            if (StringUtil.isEmptyOrSpaces(mapping.sourceUrl)) {
+                throw new ConfigurationException("Mapping Entry #" + (i + 1) + ": 'Source URL' cannot be empty.");
+            }
+            if (StringUtil.isEmptyOrSpaces(mapping.targetPath)) {
+                throw new ConfigurationException("Mapping Entry #" + (i + 1) + ": 'Target Path' cannot be empty.");
+            }
+            if (!mapping.sourceUrl.matches("^https?://.*")) { // 简单URL格式校验
+                throw new ConfigurationException("Mapping Entry #" + (i + 1) + ": Invalid 'Source URL' format. Must start with http:// or https://.");
+            }
+            try { Paths.get(mapping.targetPath.replace('\\', '/')); } // 简单路径格式校验
+            catch (InvalidPathException e) { throw new ConfigurationException("Mapping Entry #" + (i + 1) + ": Invalid 'Target Path' format: " + e.getMessage());}
+        }
+        config.setMappings(mappingsFromUI);
+        LOG.debug("[" + projectName + "][Settings] Mappings applied. Count: " + mappingsFromUI.size());
+
+        // 2. 处理 Environment Variables
+        Map<String, String> envVarsFromUI = getEnvVarsFromTable();
+        for (Map.Entry<String, String> entry : envVarsFromUI.entrySet()) {
+            if (StringUtil.isEmptyOrSpaces(entry.getKey())) {
+                // 通常表格不会允许空键，但以防万一
+                throw new ConfigurationException("Environment variable name cannot be empty.");
+            }
+        }
+        config.setEnvVariables(envVarsFromUI);
+        LOG.debug("[" + projectName + "][Settings] Environment variables applied. Count: " + envVarsFromUI.size());
+
+        // 3. 处理 Python Paths
+        String scriptPathText = pythonScriptPathField.getText().trim().replace('\\', '/');
+        if (!scriptPathText.isEmpty()) {
+            try {
+                Path path = Paths.get(scriptPathText);
+                if (!Files.exists(path) || !Files.isDirectory(path)) {
+                    throw new ConfigurationException("Python Scripts Directory does not exist or is not a directory: " + scriptPathText);
+                }
+            } catch (InvalidPathException e) {
+                throw new ConfigurationException("Invalid Python Scripts Directory path: " + e.getMessage());
+            }
+        }
         config.setPythonScriptPath(scriptPathText); // 先保存路径
 
-        // --- 核心逻辑：扫描脚本并更新组 ---
-        List<ScriptGroup> currentGroups = new ArrayList<>(config.getScriptGroups()); // 获取副本进行操作
+        String exePathText = pythonExecutablePathField.getText().trim().replace('\\', '/');
+        if (!exePathText.isEmpty()) {
+            try {
+                Path path = Paths.get(exePathText);
+                if (!Files.exists(path) || !Files.isRegularFile(path)) {
+                    throw new ConfigurationException("Python Executable does not exist or is not a file: " + exePathText);
+                }
+            } catch (InvalidPathException e) {
+                throw new ConfigurationException("Invalid Python Executable path: " + e.getMessage());
+            }
+        }
+        config.setPythonExecutablePath(exePathText);
+        LOG.debug("[" + projectName + "][Settings] Python paths applied. ScriptDir: '" + scriptPathText + "', Executable: '" + exePathText + "'");
+
+
+        // 4. 核心逻辑：扫描脚本并更新 ScriptGroups (基于新的 scriptPathText)
+        List<ScriptGroup> currentGroups = new ArrayList<>(config.getScriptGroups()); // 获取副本
         ScriptGroup defaultGroup = currentGroups.stream()
                 .filter(g -> ScriptGroup.DEFAULT_GROUP_ID.equals(g.id))
                 .findFirst().orElse(null);
 
-        if (defaultGroup == null) { // 理论上 config 的 getter/setter 会保证，但再次检查
+        if (defaultGroup == null) { // 防御性：确保 Default 组存在
             defaultGroup = new ScriptGroup(ScriptGroup.DEFAULT_GROUP_ID, ScriptGroup.DEFAULT_GROUP_NAME);
             currentGroups.add(0, defaultGroup);
         }
@@ -257,95 +319,101 @@ public class SyncFilesSettingsConfigurable implements Configurable {
             Path scriptBasePath = Paths.get(scriptPathText);
             Set<String> allConfiguredScriptPaths = currentGroups.stream()
                     .flatMap(g -> g.scripts.stream())
-                    .map(s -> s.path.toLowerCase())
+                    .map(s -> s.path.toLowerCase()) // 统一小写比较
                     .collect(Collectors.toSet());
 
-            try (Stream<Path> stream = Files.walk(scriptBasePath, 1)) { // 只扫描顶层
-                final ScriptGroup finalDefaultGroup = defaultGroup; // for lambda
+            try (Stream<Path> stream = Files.walk(scriptBasePath, 1)) {
+                final ScriptGroup finalDefaultGroup = defaultGroup;
+                SimpleDateFormat sdf = new SimpleDateFormat("yyyy/MM/dd");
                 stream.filter(Files::isRegularFile)
                         .filter(p -> p.getFileName().toString().toLowerCase().endsWith(".py"))
                         .map(p -> scriptBasePath.relativize(p).toString().replace('\\', '/'))
                         .forEach(relativePath -> {
                             if (!allConfiguredScriptPaths.contains(relativePath.toLowerCase())) {
-                                // 检查 Default 组是否已包含此路径（以防万一）
                                 boolean alreadyInDefault = finalDefaultGroup.scripts.stream()
                                         .anyMatch(s -> s.path.equalsIgnoreCase(relativePath));
                                 if (!alreadyInDefault) {
                                     ScriptEntry newEntry = new ScriptEntry(relativePath);
-                                    newEntry.description = "Auto-added on settings save " + new java.text.SimpleDateFormat("yyyy/MM/dd").format(new Date());
+                                    newEntry.description = "Auto-added on settings save " + sdf.format(new Date());
                                     finalDefaultGroup.scripts.add(newEntry);
-                                    LOG.info("Settings Apply: Added new script '" + relativePath + "' to Default group.");
+                                    LOG.info("[" + projectName + "][Settings Apply] Added new script '" + relativePath + "' to Default group.");
                                 }
                             }
                         });
                 defaultGroup.scripts.sort(Comparator.comparing(s -> s.getDisplayName().toLowerCase()));
             } catch (IOException e) {
-                LOG.warn("Error scanning script directory during settings apply: " + scriptPathText, e);
-                // 可以考虑抛出 ConfigurationException 或者仅记录日志
+                LOG.warn("[" + projectName + "][Settings Apply] Error scanning script directory '" + scriptPathText + "': " + e.getMessage(), e);
+                // 不抛出 ConfigurationException，允许其他设置保存，但记录警告
             }
-        } else { // scriptPathText 为空或无效
-            LOG.info("Settings Apply: Python script path is empty or invalid. Clearing all scripts from groups.");
+        } else {
+            LOG.info("[" + projectName + "][Settings Apply] Python script path is empty or invalid. Clearing all scripts from groups.");
             for (ScriptGroup group : currentGroups) {
-                group.scripts.clear(); // 清空每个组的脚本
+                group.scripts.clear();
             }
-            // 如果希望只保留空的 Default 组，可以进一步处理 currentGroups
-            // 例如：currentGroups.removeIf(g -> !ScriptGroup.DEFAULT_GROUP_ID.equals(g.id));
-            // 但通常清空所有组的脚本，让 config 的 getter/setter 确保 Default 组存在就够了。
         }
-        config.setScriptGroups(currentGroups); // 保存更新后的组和脚本列表
-        // --- 核心逻辑结束 ---
+        config.setScriptGroups(currentGroups);
+        LOG.debug("[" + projectName + "][Settings] Script groups updated.");
 
 
-        // ... (设置 watchEntries 的代码保持不变) ...
-        // ★★★ 4. 处理 Watch Entries (这是您需要添加的部分) ★★★
-        List<WatchEntry> watchEntriesFromUI = watchEntriesTableModel.getEntries(); // 从 TableModel 获取数据
-        // 对 watchEntriesFromUI 进行校验 (非常重要)
+        // 5. 处理 Watch Entries
+        List<WatchEntry> watchEntriesFromUI = watchEntriesTableModel.getEntries();
         for (int i = 0; i < watchEntriesFromUI.size(); i++) {
             WatchEntry entry = watchEntriesFromUI.get(i);
-            if (StringUtil.isEmptyOrSpaces(entry.watchedPath)) {
+            String entryWatchedPath = entry.watchedPath != null ? entry.watchedPath.trim().replace('\\', '/') : "";
+            String entryOnEventScript = entry.onEventScript != null ? entry.onEventScript.trim().replace('\\', '/') : "";
+
+            if (StringUtil.isEmptyOrSpaces(entryWatchedPath)) {
                 throw new ConfigurationException("Watch Entry #" + (i + 1) + ": 'Path to Watch' cannot be empty.");
             }
-            if (StringUtil.isEmptyOrSpaces(entry.onEventScript)) {
+            if (StringUtil.isEmptyOrSpaces(entryOnEventScript)) {
                 throw new ConfigurationException("Watch Entry #" + (i + 1) + ": 'Python Script on Modify' cannot be empty.");
             }
-            // 校验路径格式 (可选但推荐)
             try {
-                Paths.get(entry.watchedPath.replace('\\', '/'));
+                Paths.get(entryWatchedPath); // 校验被监控路径格式
             } catch (InvalidPathException e) {
-                throw new ConfigurationException("Watch Entry #" + (i + 1) + ": Invalid 'Path to Watch' format: " + e.getMessage());
+                throw new ConfigurationException("Watch Entry #" + (i + 1) + ": Invalid 'Path to Watch' format: '" + entryWatchedPath + "'. " + e.getMessage());
             }
-            // 校验脚本路径 (可选，但如果脚本目录已设置，可以检查相对路径的有效性)
-            if (!scriptPathText.isEmpty() && !Paths.get(entry.onEventScript).isAbsolute()) {
-                try {
-                    Path fullScriptForWatch = Paths.get(scriptPathText, entry.onEventScript.replace('\\', '/'));
-                    // 注意：这里不强制要求脚本文件必须存在于apply时，因为用户可能稍后创建它。
-                    // 但至少路径结构应该是合法的。
-                    // if (!Files.isRegularFile(fullScriptForWatch)) {
-                    //     LOG.warn("Script for watch entry does not exist (yet): " + fullScriptForWatch);
-                    // }
-                } catch (InvalidPathException e) {
-                    throw new ConfigurationException("Watch Entry #" + (i + 1) + ": Invalid 'Python Script on Modify' path structure relative to script directory: " + e.getMessage());
+
+            // 校验脚本路径
+            Path scriptForWatchPath = Paths.get(entryOnEventScript);
+            if (!scriptForWatchPath.isAbsolute()) { // 如果脚本是相对路径
+                if (scriptPathText.isEmpty()) {
+                    throw new ConfigurationException("Watch Entry #" + (i + 1) + ": 'Python Script on Modify' ('" + entryOnEventScript +
+                            "') must be an absolute path if 'Python Scripts Directory' is not set.");
                 }
-            } else if (scriptPathText.isEmpty() && !Paths.get(entry.onEventScript).isAbsolute()){
-                throw new ConfigurationException("Watch Entry #" + (i + 1) + ": 'Python Script on Modify' must be an absolute path if 'Python Scripts Directory' is not set.");
+                try {
+                    // 这里可以尝试解析为绝对路径，但不强制检查文件是否存在，因为服务启动时会检查
+                    Paths.get(scriptPathText, entryOnEventScript);
+                } catch (InvalidPathException e) {
+                    throw new ConfigurationException("Watch Entry #" + (i + 1) + ": Invalid relative 'Python Script on Modify' path structure: '" + entryOnEventScript + "'. " + e.getMessage());
+                }
+            } else { // 脚本是绝对路径，可以做个简单存在性检查（可选）
+                // if (!Files.isRegularFile(scriptForWatchPath)) {
+                // LOG.warn("Absolute script for watch entry does not exist (yet): " + scriptForWatchPath);
+                // }
             }
         }
-        config.setWatchEntries(watchEntriesFromUI); // ★★★ 将获取到的数据设置到配置中 ★★★
-        // ★★★ 处理 Watch Entries 结束 ★★★
+        config.setWatchEntries(watchEntriesFromUI);
+        LOG.debug("[" + projectName + "][Settings] Watch entries applied. Count: " + watchEntriesFromUI.size());
+
+
         // 通知配置已更改
         project.getMessageBus().syncPublisher(SyncFilesNotifier.TOPIC).configurationChanged();
+        LOG.info("[" + projectName + "][Settings] configurationChanged notification published.");
 
-        // 更新 watcher service
+        // 更新 watcher services (这些服务会从 config 中读取最新的配置)
         ProjectDirectoryWatcherService pyScriptDirWatcher = project.getService(ProjectDirectoryWatcherService.class);
         if (pyScriptDirWatcher != null) {
-            pyScriptDirWatcher.updateWatchedDirectories(); // 这个 watcher 会监听脚本目录变化
+            pyScriptDirWatcher.updateWatchedDirectories();
         }
         FileChangeEventWatcherService fileChangeEventWatcher = project.getService(FileChangeEventWatcherService.class);
         if (fileChangeEventWatcher != null) {
             fileChangeEventWatcher.updateWatchersFromConfig();
         }
+        LOG.info("[" + projectName + "][Settings] Watcher services instructed to update from new config.");
 
-        updateOriginalState(); // 保存后更新原始状态
+        updateOriginalState(); // 保存后更新原始状态，以便 isModified() 正确工作
+        LOG.info("[" + projectName + "][Settings] Apply complete.");
     }
 
     @Override
