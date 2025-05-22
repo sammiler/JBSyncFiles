@@ -87,7 +87,7 @@
 
     <depends>com.intellij.modules.platform</depends>
     <!-- 如果使用了 TerminalView API，可能需要明确依赖 Terminal 插件 -->
-    <depends optional="true" config-file="syncfiles-terminal.xml">org.jetbrains.plugins.terminal</depends>
+    <depends>org.jetbrains.plugins.terminal</depends>
 
     <extensions defaultExtensionNs="com.intellij">
         <!-- Project Level Services -->

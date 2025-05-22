@@ -37,9 +37,10 @@ import com.intellij.openapi.vfs.VfsUtil;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowManager;
-import org.jetbrains.plugins.terminal.TerminalView; // 核心 Terminal API
-import org.jetbrains.plugins.terminal.ShellTerminalWidget;
-import org.jetbrains.plugins.terminal.TerminalToolWindowFactory;
+import com.intellij.terminal.JBTerminalWidget;
+import com.intellij.ui.content.Content;
+import com.intellij.ui.content.ContentManager;
+import org.jetbrains.plugins.terminal.*;
 import com.intellij.ui.IdeBorderFactory;
 import com.intellij.ui.PopupHandler;
 import com.intellij.ui.ScrollPaneFactory;
@@ -835,9 +836,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
 
                 if (widgetToUse != null) {
                     try {
-                        // 如何为 widgetToUse 设置初始环境变量是个挑战。
-                        // 如果 widget 是新创建的，PtyProcessBuilder (如果通过它创建) 可能允许设置环境。
-                        // 如果是复用已有的，命令行中嵌入环境变量设置是常用方法。
+                        var shellPath = TerminalProjectOptionsProvider.getInstance(project).getShellPath();
                         LOG.info("Sending command to terminal widget: " + finalCommandToExecute);
                         widgetToUse.executeCommand(finalCommandToExecute);
                     } catch (Exception e) {
@@ -852,98 +851,137 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
         });
     }
 
-    // 辅助方法，尝试查找或创建 Terminal Widget (需要根据最新的 Terminal API 进行调整)
     @Nullable
-    private ShellTerminalWidget findOrCreateTerminalWidget(@NotNull Project project, @NotNull ToolWindow terminalToolWindow, @NotNull String tabName) {
-        // 这是一个高度依赖具体 Terminal API 版本的实现
-        // 以下是一种可能的思路，但您需要验证
-        com.intellij.ui.content.ContentManager contentManager = terminalToolWindow.getContentManager();
-        com.intellij.ui.content.Content selectedContent = contentManager.getSelectedContent();
+    @SuppressWarnings("deprecation") // 因为我们将使用已废弃的 API
+    public ShellTerminalWidget findOrCreateTerminalWidget(@NotNull Project project, @NotNull ToolWindow terminalToolWindow, @NotNull String tabName) {
+        ContentManager contentManager = terminalToolWindow.getContentManager();
 
-        // 尝试复用当前选中的 Terminal Tab (如果它是 ShellTerminalWidget)
-        if (selectedContent != null && selectedContent.getComponent() instanceof ShellTerminalWidget) {
-            ShellTerminalWidget selectedWidget = (ShellTerminalWidget) selectedContent.getComponent();
-            if (selectedWidget.isSessionRunning()) { // 或者其他判断是否可用的条件
-                LOG.info("Reusing selected terminal widget.");
+        // 1. 尝试复用当前选中的终端标签页（如果其名称匹配）
+        Content selectedContent = contentManager.getSelectedContent();
+        if (selectedContent != null && tabName.equals(selectedContent.getDisplayName())) {
+            ShellTerminalWidget selectedWidget = findActualTerminalWidget(selectedContent.getComponent());
+            if (selectedWidget != null && selectedWidget.isSessionRunning()) {
+                LOG.info("复用选中的且名称匹配的终端: " + tabName);
+                contentManager.setSelectedContent(selectedContent, true);
+                selectedWidget.getTerminalPanel().requestFocusInWindow();
                 return selectedWidget;
             }
         }
 
-        // 尝试查找一个名为 tabName 的 Tab (如果之前创建过)
-        for (com.intellij.ui.content.Content content : contentManager.getContents()) {
-            if (tabName.equals(content.getDisplayName()) && content.getComponent() instanceof ShellTerminalWidget) {
-                ShellTerminalWidget existingWidget = (ShellTerminalWidget) content.getComponent();
-                contentManager.setSelectedContent(content); // 选中它
-                LOG.info("Reusing existing terminal widget with tab name: " + tabName);
-                return existingWidget;
+        // 2. 尝试查找具有特定名称的现有标签页
+        for (Content content : contentManager.getContents()) {
+            if (tabName.equals(content.getDisplayName())) {
+                ShellTerminalWidget existingWidget = findActualTerminalWidget(content.getComponent());
+                if (existingWidget != null) {
+                    contentManager.setSelectedContent(content, true);
+                    LOG.info("复用已存在的终端标签页: " + tabName);
+                    existingWidget.getTerminalPanel().requestFocusInWindow();
+                    return existingWidget;
+                }
             }
         }
 
-        // 如果没有合适的，尝试创建一个新的 Terminal 会话/Widget
-        // 这部分 API 是最容易发生变化的。
-        // 旧的 TerminalView.createLocalShellWidget 可能有新的服务或工厂方法替代。
-        // 例如，可能需要使用 TerminalRunner 或类似的类来启动一个新的PtyProcess，然后包装成 Widget。
-        LOG.info("Attempting to create a new terminal widget with tab name: " + tabName);
+        // 3. 如果未找到，则使用已废弃的 createLocalShellWidget 创建新终端
+        LOG.info("尝试使用已废弃的 createLocalShellWidget 创建新的终端标签页: " + tabName);
         try {
-            // 【关键：这里需要找到创建 ShellTerminalWidget 的新方法】
-            // 这只是一个占位符，实际的 API 可能完全不同。
-            // 您可能需要查找 TerminalProjectOptionsProvider, PtyProcessBuilder,
-            // أو TerminalArrangementManager, TerminalStarter 等相关的类。
+            TerminalToolWindowManager terminalManager = TerminalToolWindowManager.getInstance(project);
+            String workingDirectory = project.getBasePath(); // 或 null 使用默认，或指定特定路径
+            boolean requestFocus = true; // 通常希望新终端获得焦点
 
-            // 这是一个非常粗略的猜测，基于以前的API模式：
-            // TerminalSettings terminalSettings = TerminalSettings.getInstance(); // 获取设置
-            // AbstractTerminalRunner<?> runner = new LocalTerminalDirectRunner(project); // 某种 Runner
-            // PtyProcess ptyProcess = runner.createProcess(project.getBasePath(), null); // 创建进程
-            // ShellTerminalWidget newWidget = new ShellTerminalWidget(project, terminalSettings, terminalToolWindow.getDisposable());
-            // newWidget.setProcess(ptyProcess, true); // 关联进程
+            // ---- 使用已废弃但可能仍然存在的方法 ----
+            JBTerminalWidget jbWidget = terminalManager.createLocalShellWidget(workingDirectory, tabName, requestFocus);
+            // ------------------------------------
 
-            // 另一种可能性是有一个服务：
-            // SomeTerminalCreatorService service = project.getService(SomeTerminalCreatorService.class);
-            // ShellTerminalWidget newWidget = service.createTerminalWidget(project.getBasePath(), tabName);
+            if (jbWidget == null) {
+                LOG.error("TerminalToolWindowManager.createLocalShellWidget(...) 返回了 null，标签页: " + tabName);
+                return null;
+            }
 
-            // **由于无法确定 2025.1 的确切 API，这里暂时返回 null，表示创建失败**
-            // **您需要替换以下行为实际的创建逻辑**
-            LOG.warn("Placeholder: Actual creation of new ShellTerminalWidget is NOT IMPLEMENTED for the new API. Please update this section.");
+            ShellTerminalWidget newWidget = null;
 
-            // --- BEGIN 临时创建（如果 TerminalView 的 create 仍然可用，仅用于测试） ---
-            // 这是一个临时的回退尝试，如果 TerminalView 类仍然存在，但只有 getInstance() 过时
-            try {
-                Object terminalViewInstance = Class.forName("org.jetbrains.plugins.terminal.TerminalView")
-                        .getMethod("getInstance", Project.class)
-                        .invoke(null, project);
-                if (terminalViewInstance != null) {
-                    java.lang.reflect.Method createWidgetMethod = terminalViewInstance.getClass()
-                            .getMethod("createLocalShellWidget", String.class, String.class, boolean.class);
-                    // boolean attachToProcess = true; // 或者根据API调整
-                    // ShellTerminalWidget tempWidget = (ShellTerminalWidget) createWidgetMethod.invoke(terminalViewInstance, project.getBasePath(), tabName, true);
+            // createLocalShellWidget 返回 JBTerminalWidget。
+            // 我们期望它是 ShellTerminalWidget 或包含 ShellTerminalWidget。
+            if (jbWidget instanceof ShellTerminalWidget) {
+                newWidget = (ShellTerminalWidget) jbWidget;
+            } else if (jbWidget instanceof Component) {
+                // 如果 JBTerminalWidget 是一个更广泛的组件，尝试在其内部递归查找
+                newWidget = findActualTerminalWidget((Component) jbWidget);
+            }
 
-                    // 更可能是这样：
-                    java.lang.reflect.Method createWidgetMethodSimple = terminalViewInstance.getClass()
-                            .getMethod("createLocalShellWidget", String.class, String.class);
-                    ShellTerminalWidget tempWidget = (ShellTerminalWidget) createWidgetMethodSimple.invoke(terminalViewInstance, project.getBasePath(), tabName);
+            if (newWidget == null) {
+                LOG.error("通过 createLocalShellWidget 创建了 JBTerminalWidget，但未能从中解析出 ShellTerminalWidget。JBTerminalWidget 类型: " +
+                        jbWidget.getClass().getName() + "，标签页: " + tabName);
+                return null;
+            }
 
+            // 这个API应该已经处理了Content的创建、命名和选择（如果requestFocus为true）。
+            // 我们需要验证一下，并确保焦点。
+            Content newWidgetContent = null;
+            // 尝试找到与新 widget 关联的 Content
+            // 通常，如果 requestFocus 为 true，它会是当前选中的 Content
+            Content currentSelectedAfterCreation = contentManager.getSelectedContent();
+            if (currentSelectedAfterCreation != null) {
+                ShellTerminalWidget widgetInSelected = findActualTerminalWidget(currentSelectedAfterCreation.getComponent());
+                // 通过实例比较或确保新 widget 在选中的 content 组件内部
+                if (widgetInSelected == newWidget || (currentSelectedAfterCreation.getComponent() == jbWidget)) {
+                    newWidgetContent = currentSelectedAfterCreation;
+                }
+            }
 
-                    if (tempWidget != null) {
-                        LOG.info("TEMPORARY: Created widget using reflection on (possibly deprecated) TerminalView methods.");
-                        // 注意：通过反射创建的 Widget 可能不会自动添加到 ToolWindow 的 ContentManager。
-                        // 但如果 createLocalShellWidget 内部处理了，那就可以了。
-                        // 如果它不自动添加，那么这里还需要代码来创建 Content 并添加到 ContentManager。
-                        return tempWidget;
+            // 如果没有通过选中项找到，则遍历（以防万一）
+            if (newWidgetContent == null) {
+                for (Content content : contentManager.getContents()) {
+                    if (tabName.equals(content.getDisplayName())) {
+                        ShellTerminalWidget widgetInContent = findActualTerminalWidget(content.getComponent());
+                        if (widgetInContent == newWidget || (content.getComponent() == jbWidget) ) {
+                            newWidgetContent = content;
+                            break;
+                        }
                     }
                 }
-            } catch (Exception reflectionEx) {
-                LOG.warn("Reflection attempt to use old TerminalView.createLocalShellWidget failed.", reflectionEx);
             }
-            // --- END 临时创建 ---
 
+            if (newWidgetContent != null) {
+                contentManager.setSelectedContent(newWidgetContent, true); // 确保选中
+                if (!tabName.equals(newWidgetContent.getDisplayName())) {
+                    LOG.warn("Content 的名称 '" + newWidgetContent.getDisplayName() + "' 与期望的 tabName '" + tabName + "' 不符。将尝试修正。");
+                    newWidgetContent.setDisplayName(tabName); // 修正名称
+                }
+            } else {
+                LOG.warn("成功创建了 ShellTerminalWidget，但未能明确关联其 Content 对象。标签页 '" + tabName + "' 的选择和命名可能不完美。");
+            }
 
-            return null; // 表示创建失败，等待正确的API实现
+            newWidget.getTerminalPanel().requestFocusInWindow();
+            LOG.info("成功通过已废弃的 createLocalShellWidget 创建并定位到终端: " + tabName);
+            return newWidget;
+
         } catch (Exception e) {
-            LOG.error("Error trying to create new ShellTerminalWidget.", e);
+            LOG.error("尝试使用已废弃的 createLocalShellWidget API 为标签页 " + tabName + " 创建新的 ShellTerminalWidget 时出错。", e);
             return null;
         }
     }
 
+    /**
+     * 在给定的组件层级结构中递归搜索 ShellTerminalWidget。
+     */
+    @Nullable
+    private ShellTerminalWidget findActualTerminalWidget(@Nullable Component component) {
+        if (component == null) {
+            return null;
+        }
+        if (component instanceof ShellTerminalWidget) {
+            return (ShellTerminalWidget) component;
+        }
+        if (component instanceof Container) {
+            for (Component child : ((Container) component).getComponents()) {
+                ShellTerminalWidget found = findActualTerminalWidget(child);
+                if (found != null) {
+                    return found;
+                }
+            }
+        }
+        return null;
+    }
 
     // 在 SyncFilesToolWindowFactory.java 的 executeScriptDirectly 方法中
     private void executeScriptDirectly(Project project, String pythonExecutable, String scriptPath, Map<String, String> envVars, String displayName) {
@@ -964,9 +1002,6 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
                     Map<String, String> effectiveEnv = new HashMap<>(EnvironmentUtil.getEnvironmentMap());
                     effectiveEnv.putAll(envVars);
                     effectiveEnv.put("PYTHONIOENCODING", "UTF-8");
-                    if (project.getBasePath() != null) {
-                        effectiveEnv.put("PROJECT_DIR", project.getBasePath().replace('\\','/'));
-                    }
                     pb.environment().clear();
                     pb.environment().putAll(effectiveEnv);
                     pb.directory(project.getBasePath() != null ? new File(project.getBasePath()) : Paths.get(scriptPath).getParent().toFile());
