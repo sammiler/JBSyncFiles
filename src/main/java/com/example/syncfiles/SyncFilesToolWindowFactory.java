@@ -38,8 +38,10 @@ import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowManager;
 import com.intellij.terminal.JBTerminalWidget;
+import com.intellij.terminal.ui.TerminalWidget;
 import com.intellij.ui.content.Content;
 import com.intellij.ui.content.ContentManager;
+import org.jetbrains.annotations.Nls;
 import org.jetbrains.plugins.terminal.*;
 import com.intellij.ui.IdeBorderFactory;
 import com.intellij.ui.PopupHandler;
@@ -852,135 +854,131 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
     }
 
     @Nullable
-    @SuppressWarnings("deprecation") // 因为我们将使用已废弃的 API
-    public ShellTerminalWidget findOrCreateTerminalWidget(@NotNull Project project, @NotNull ToolWindow terminalToolWindow, @NotNull String tabName) {
+    public ShellTerminalWidget findOrCreateTerminalWidget(@NotNull Project project,
+                                                          @NotNull ToolWindow terminalToolWindow,
+                                                          @NotNull @Nls String desiredTabName) {
         ContentManager contentManager = terminalToolWindow.getContentManager();
+        TerminalToolWindowManager terminalManager = TerminalToolWindowManager.getInstance(project);
 
-        // 1. 尝试复用当前选中的终端标签页（如果其名称匹配）
+        // 1. 查找现有终端 (修正获取和类型检查)
         Content selectedContent = contentManager.getSelectedContent();
-        if (selectedContent != null && tabName.equals(selectedContent.getDisplayName())) {
-            ShellTerminalWidget selectedWidget = findActualTerminalWidget(selectedContent.getComponent());
-            if (selectedWidget != null && selectedWidget.isSessionRunning()) {
-                LOG.info("复用选中的且名称匹配的终端: " + tabName);
-                contentManager.setSelectedContent(selectedContent, true);
-                selectedWidget.getTerminalPanel().requestFocusInWindow();
-                return selectedWidget;
+        if (selectedContent != null && desiredTabName.equals(selectedContent.getDisplayName())) {
+            // 尝试通过 getWidgetByContent 获取 JBTerminalWidget
+            JBTerminalWidget selectedJbWidget = TerminalToolWindowManager.getWidgetByContent(selectedContent);
+            if (selectedJbWidget instanceof ShellTerminalWidget) { // ★★★ 检查 JBTerminalWidget 是否为 ShellTerminalWidget ★★★
+                ShellTerminalWidget selectedWidget = (ShellTerminalWidget) selectedJbWidget;
+                if (selectedWidget.isSessionRunning()) {
+                    LOG.info("复用选中的且名称匹配的终端: " + desiredTabName);
+                    contentManager.setSelectedContent(selectedContent, true);
+                    selectedWidget.getTerminalPanel().requestFocusInWindow();
+                    return selectedWidget;
+                }
+            } else if (selectedJbWidget != null) {
+                LOG.warn("选中的 Content '" + desiredTabName + "' 中的 JBTerminalWidget 不是 ShellTerminalWidget，类型: " + selectedJbWidget.getClass().getName());
+            } else {
+                // 如果 getWidgetByContent 返回 null，再尝试 findWidgetByContent 看看是什么
+                TerminalWidget tw = TerminalToolWindowManager.findWidgetByContent(selectedContent);
+                if (tw != null) {
+                    LOG.warn("选中的 Content '" + desiredTabName + "' 通过 findWidgetByContent 得到: " + tw.getClass().getName() + " 但 getWidgetByContent 返回 null 或非 ShellTerminalWidget。");
+                }
             }
         }
 
-        // 2. 尝试查找具有特定名称的现有标签页
         for (Content content : contentManager.getContents()) {
-            if (tabName.equals(content.getDisplayName())) {
-                ShellTerminalWidget existingWidget = findActualTerminalWidget(content.getComponent());
-                if (existingWidget != null) {
+            if (desiredTabName.equals(content.getDisplayName())) {
+                JBTerminalWidget existingJbWidget = TerminalToolWindowManager.getWidgetByContent(content);
+                if (existingJbWidget instanceof ShellTerminalWidget) { // ★★★ 检查 JBTerminalWidget 是否为 ShellTerminalWidget ★★★
+                    ShellTerminalWidget existingWidget = (ShellTerminalWidget) existingJbWidget;
                     contentManager.setSelectedContent(content, true);
-                    LOG.info("复用已存在的终端标签页: " + tabName);
+                    LOG.info("复用已存在的终端标签页: " + desiredTabName);
                     existingWidget.getTerminalPanel().requestFocusInWindow();
                     return existingWidget;
+                } else if (existingJbWidget != null) {
+                    LOG.warn("名为 '" + desiredTabName + "' 的 Content 中的 JBTerminalWidget 不是 ShellTerminalWidget，类型: " + existingJbWidget.getClass().getName());
+                } else {
+                    TerminalWidget tw = TerminalToolWindowManager.findWidgetByContent(content);
+                    if (tw != null) {
+                        LOG.warn("名为 '" + desiredTabName + "' 的 Content 通过 findWidgetByContent 得到: " + tw.getClass().getName() + " 但 getWidgetByContent 返回 null 或非 ShellTerminalWidget。");
+                    }
                 }
             }
         }
 
-        // 3. 如果未找到，则使用已废弃的 createLocalShellWidget 创建新终端
-        LOG.info("尝试使用已废弃的 createLocalShellWidget 创建新的终端标签页: " + tabName);
+        // 3. 如果未找到，则创建新的终端会话 (自定义Runner流程)
+        LOG.info("尝试使用自定义Runner和非废弃API创建新的终端标签页: " + desiredTabName);
         try {
-            TerminalToolWindowManager terminalManager = TerminalToolWindowManager.getInstance(project);
-            String workingDirectory = project.getBasePath(); // 或 null 使用默认，或指定特定路径
-            boolean requestFocus = true; // 通常希望新终端获得焦点
+            AbstractTerminalRunner<?> customRunner = new LocalTerminalDirectRunner(project) {
+                @Override
+                public @NotNull @Nls String getDefaultTabTitle() {
+                    return desiredTabName;
+                }
+            };
 
-            // ---- 使用已废弃但可能仍然存在的方法 ----
-            JBTerminalWidget jbWidget = terminalManager.createLocalShellWidget(workingDirectory, tabName, requestFocus);
-            // ------------------------------------
+            terminalManager.createNewSession(customRunner); // public void
 
-            if (jbWidget == null) {
-                LOG.error("TerminalToolWindowManager.createLocalShellWidget(...) 返回了 null，标签页: " + tabName);
-                return null;
-            }
+            ShellTerminalWidget newShellWidget = null;
+            Content newTerminalContent = null;
 
-            ShellTerminalWidget newWidget = null;
+            // 查找新创建的终端 (与上一版逻辑类似，但现在我们知道查找现有项时要用 getWidgetByContent)
+            // 优先检查当前选中的 Content
+            Content justCreatedAndSelectedContent = contentManager.getSelectedContent();
+            if (justCreatedAndSelectedContent != null &&
+                    justCreatedAndSelectedContent.getDisplayName() != null &&
+                    justCreatedAndSelectedContent.getDisplayName().startsWith(desiredTabName)) {
 
-            // createLocalShellWidget 返回 JBTerminalWidget。
-            // 我们期望它是 ShellTerminalWidget 或包含 ShellTerminalWidget。
-            if (jbWidget instanceof ShellTerminalWidget) {
-                newWidget = (ShellTerminalWidget) jbWidget;
-            } else if (jbWidget instanceof Component) {
-                // 如果 JBTerminalWidget 是一个更广泛的组件，尝试在其内部递归查找
-                newWidget = findActualTerminalWidget((Component) jbWidget);
-            }
-
-            if (newWidget == null) {
-                LOG.error("通过 createLocalShellWidget 创建了 JBTerminalWidget，但未能从中解析出 ShellTerminalWidget。JBTerminalWidget 类型: " +
-                        jbWidget.getClass().getName() + "，标签页: " + tabName);
-                return null;
-            }
-
-            // 这个API应该已经处理了Content的创建、命名和选择（如果requestFocus为true）。
-            // 我们需要验证一下，并确保焦点。
-            Content newWidgetContent = null;
-            // 尝试找到与新 widget 关联的 Content
-            // 通常，如果 requestFocus 为 true，它会是当前选中的 Content
-            Content currentSelectedAfterCreation = contentManager.getSelectedContent();
-            if (currentSelectedAfterCreation != null) {
-                ShellTerminalWidget widgetInSelected = findActualTerminalWidget(currentSelectedAfterCreation.getComponent());
-                // 通过实例比较或确保新 widget 在选中的 content 组件内部
-                if (widgetInSelected == newWidget || (currentSelectedAfterCreation.getComponent() == jbWidget)) {
-                    newWidgetContent = currentSelectedAfterCreation;
+                JBTerminalWidget widgetInSelected = TerminalToolWindowManager.getWidgetByContent(justCreatedAndSelectedContent);
+                if (widgetInSelected instanceof ShellTerminalWidget) {
+                    newShellWidget = (ShellTerminalWidget) widgetInSelected;
+                    newTerminalContent = justCreatedAndSelectedContent;
+                    LOG.info("通过当前选中的 Content 初步定位到新终端 (JBTerminalWidget as ShellTerminalWidget): " + newTerminalContent.getDisplayName());
                 }
             }
 
-            // 如果没有通过选中项找到，则遍历（以防万一）
-            if (newWidgetContent == null) {
+            if (newShellWidget == null) {
+                LOG.warn("未能通过选中项快速定位新终端，将遍历所有 Content 查找名称以 '" + desiredTabName + "' 开头的标签页。");
+                // try { Thread.sleep(50); } catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+
                 for (Content content : contentManager.getContents()) {
-                    if (tabName.equals(content.getDisplayName())) {
-                        ShellTerminalWidget widgetInContent = findActualTerminalWidget(content.getComponent());
-                        if (widgetInContent == newWidget || (content.getComponent() == jbWidget) ) {
-                            newWidgetContent = content;
+                    if (content.getDisplayName() != null &&
+                            content.getDisplayName().startsWith(desiredTabName)) {
+                        JBTerminalWidget widgetInContent = TerminalToolWindowManager.getWidgetByContent(content);
+                        if (widgetInContent instanceof ShellTerminalWidget) {
+                            newShellWidget = (ShellTerminalWidget) widgetInContent;
+                            newTerminalContent = content;
+                            LOG.info("通过遍历找到了名称以 '" + desiredTabName + "' 开头的终端 (JBTerminalWidget as ShellTerminalWidget): " + newTerminalContent.getDisplayName());
                             break;
                         }
                     }
                 }
             }
 
-            if (newWidgetContent != null) {
-                contentManager.setSelectedContent(newWidgetContent, true); // 确保选中
-                if (!tabName.equals(newWidgetContent.getDisplayName())) {
-                    LOG.warn("Content 的名称 '" + newWidgetContent.getDisplayName() + "' 与期望的 tabName '" + tabName + "' 不符。将尝试修正。");
-                    newWidgetContent.setDisplayName(tabName); // 修正名称
+            if (newShellWidget == null) {
+                LOG.error("调用 createNewSession(customRunner) 后，未能找到名为 '" + desiredTabName + "' (或其变体) 的 ShellTerminalWidget。");
+                // 尝试打印出最后创建的 content 的 widget 类型，进行调试
+                if (contentManager.getContentCount() > 0) {
+                    Content lastContent = contentManager.getContent(contentManager.getContentCount() - 1);
+                    if (lastContent != null) {
+                        JBTerminalWidget lastJbW = TerminalToolWindowManager.getWidgetByContent(lastContent);
+                        TerminalWidget lastTw = TerminalToolWindowManager.findWidgetByContent(lastContent);
+                        LOG.debug("Last content's widget (JB): " + (lastJbW != null ? lastJbW.getClass().getName() : "null") +
+                                ", widget (TerminalWidget): " + (lastTw != null ? lastTw.getClass().getName() : "null"));
+                    }
                 }
-            } else {
-                LOG.warn("成功创建了 ShellTerminalWidget，但未能明确关联其 Content 对象。标签页 '" + tabName + "' 的选择和命名可能不完美。");
+                return null;
             }
 
-            newWidget.getTerminalPanel().requestFocusInWindow();
-            LOG.info("成功通过已废弃的 createLocalShellWidget 创建并定位到终端: " + tabName);
-            return newWidget;
+            if (newTerminalContent != null) {
+                contentManager.setSelectedContent(newTerminalContent, true);
+            }
+            newShellWidget.getTerminalPanel().requestFocusInWindow();
+
+            LOG.info("成功使用自定义Runner创建并定位到终端: " + (newTerminalContent != null ? newTerminalContent.getDisplayName() : desiredTabName));
+            return newShellWidget;
 
         } catch (Exception e) {
-            LOG.error("尝试使用已废弃的 createLocalShellWidget API 为标签页 " + tabName + " 创建新的 ShellTerminalWidget 时出错。", e);
+            LOG.error("尝试为标签页 " + desiredTabName + " 创建新的 ShellTerminalWidget (自定义Runner流程) 时出错。", e);
             return null;
         }
-    }
-
-    /**
-     * 在给定的组件层级结构中递归搜索 ShellTerminalWidget。
-     */
-    @Nullable
-    private ShellTerminalWidget findActualTerminalWidget(@Nullable Component component) {
-        if (component == null) {
-            return null;
-        }
-        if (component instanceof ShellTerminalWidget) {
-            return (ShellTerminalWidget) component;
-        }
-        if (component instanceof Container) {
-            for (Component child : ((Container) component).getComponents()) {
-                ShellTerminalWidget found = findActualTerminalWidget(child);
-                if (found != null) {
-                    return found;
-                }
-            }
-        }
-        return null;
     }
 
     // 在 SyncFilesToolWindowFactory.java 的 executeScriptDirectly 方法中
