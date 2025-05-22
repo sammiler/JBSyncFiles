@@ -105,8 +105,7 @@
         <!-- Settings Page -->
         <projectConfigurable id="com.example.syncfiles.SyncFilesSettings"
                              displayName="SyncFiles Settings"
-                             instance="com.example.syncfiles.SyncFilesSettingsConfigurable"
-                             groupId="tools"/>
+                             instance="com.example.syncfiles.SyncFilesSettingsConfigurable"/>
     </extensions>
 
 

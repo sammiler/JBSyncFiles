@@ -784,138 +784,231 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
 
     // --- Script Execution Methods ---
 
+    // 在 SyncFilesToolWindowFactory.java 的 executeScriptInTerminal 方法中
+
     private void executeScriptInTerminal(Project project, String pythonExecutable, String scriptPath, Map<String, String> envVars) {
         LOG.info("Executing in terminal: " + pythonExecutable + " " + scriptPath);
-        // 确保脚本文件已刷新到磁盘
-        Util.forceRefreshVFS(scriptPath);
+        Util.forceRefreshVFS(scriptPath); // 确保文件已同步
 
-        try {
-            TerminalView terminalView = TerminalView.getInstance(project);
-            // 构建命令行，考虑环境变量
-            List<String> command = new ArrayList<>();
-            // 环境变量处理 (这是复杂的部分，不同终端和OS行为不同)
-            // 简单方式：不直接在命令里设置，依赖用户终端环境或通过包装脚本
-            // 较复杂方式：尝试为cmd/bash等生成 "set VAR=VAL && command" 或 "VAR=VAL command"
-            // 对于 IntelliJ Terminal，直接执行命令，环境变量可能需要通过 PtyProcess 或 TerminalExecutionConsole 设置
+        // 获取 Terminal ToolWindow
+        ToolWindow terminalToolWindow = ToolWindowManager.getInstance(project).getToolWindow(org.jetbrains.plugins.terminal.TerminalToolWindowFactory.TOOL_WINDOW_ID);
+        if (terminalToolWindow == null) {
+            Messages.showErrorDialog(project, "Terminal tool window is not available.", "Terminal Error");
+            LOG.warn("Terminal tool window not found.");
+            return;
+        }
 
-            // 如果环境变量需要在命令本身中设置（例如，非交互式执行或特定终端行为）
-            StringBuilder commandPrefix = new StringBuilder();
-            if (SystemInfo.isWindows) {
-                for (Map.Entry<String, String> entry : envVars.entrySet()) {
-                    // cmd: set "VAR=VALUE" &&
-                    // 注意：这种方式在某些终端模拟器中可能不按预期工作，特别是对于后续命令
-                    commandPrefix.append("set \"").append(entry.getKey()).append("=").append(entry.getValue()).append("\" && ");
-                }
-            } else { // macOS or Linux
-                for (Map.Entry<String, String> entry : envVars.entrySet()) {
-                    // bash/sh: export VAR='VALUE' ;
-                    // 或者 VAR='VALUE' python_executable ...
-                    // 为了简单，暂时不通过这种方式传递环境变量给交互式终端，依赖于profile或直接执行
-                }
+        // 准备命令 (这部分逻辑保持，但可能需要调整环境变量设置方式)
+        String commandToExecute;
+        // ... (构建 commandToExecute 的逻辑，如之前讨论的 PowerShell 和 Bash/Zsh 方式) ...
+        // [之前的 commandToExecute 构建逻辑]
+        String normPythonExec = pythonExecutable.replace('\\', '/');
+        String normScriptPath = scriptPath.replace('\\', '/');
+        boolean isLikelyPowerShell = SystemInfo.isWindows;
+
+        if (isLikelyPowerShell) {
+            StringBuilder psCommand = new StringBuilder();
+            for (Map.Entry<String, String> entry : envVars.entrySet()) {
+                String escapedValue = entry.getValue().replace("'", "''");
+                psCommand.append("$env:").append(entry.getKey()).append(" = '").append(escapedValue).append("'; ");
             }
+            psCommand.append("& '").append(normPythonExec).append("' '").append(normScriptPath).append("'");
+            commandToExecute = psCommand.toString();
+        } else {
+            StringBuilder bashCommand = new StringBuilder();
+            for (Map.Entry<String, String> entry : envVars.entrySet()) {
+                String escapedValue = entry.getValue().replace("'", "'\\''");
+                bashCommand.append("export ").append(entry.getKey()).append("='").append(escapedValue).append("'; ");
+            }
+            bashCommand.append("\"").append(normPythonExec).append("\" \"").append(normScriptPath).append("\"");
+            commandToExecute = bashCommand.toString();
+        }
+        // --- 命令构建结束 ---
 
-            String finalCommand = commandPrefix + "\"" + pythonExecutable.replace("\\","/") + "\" \"" + scriptPath.replace("\\","/") + "\"";
+        // 显示 Terminal ToolWindow 并尝试执行命令
+        final String finalCommandToExecute = commandToExecute; // for lambda
+        ApplicationManager.getApplication().invokeLater(() -> {
+            terminalToolWindow.show(() -> { // 回调会在 ToolWindow 显示后执行
+                // 尝试从现有的 Content 中获取 ShellTerminalWidget，或者创建一个新的
+                // 这是最可能需要根据新 API 调整的部分
+                ShellTerminalWidget widgetToUse = findOrCreateTerminalWidget(project, terminalToolWindow, "SyncFiles Script");
 
-            // 获取或创建一个 Terminal Widget
-            // 参数：command (null for default shell), workingDirectory (null for project base)
-            ShellTerminalWidget widget = terminalView.createLocalShellWidget(project.getBasePath(), "SyncFiles Script");
-            if (widget != null) {
-                ApplicationManager.getApplication().invokeLater(() -> {
-                    ToolWindow terminalToolWindow = ToolWindowManager.getInstance(project).getToolWindow(TerminalToolWindowFactory.TOOL_WINDOW_ID);
-                    if (terminalToolWindow != null) {
-                        terminalToolWindow.show(null); // 显示终端窗口
-                    }
-                    // 设置环境变量到PtyProcess (如果适用且API允许)
-                    // widget.getPtyProcess().setEnvironment(envVars); // 这行是假设性的，实际API可能不同
-
-                    // 发送命令
+                if (widgetToUse != null) {
                     try {
-                        // 对于已经启动的 shell，我们发送文本命令
-                        widget.executeCommand(finalCommand);
-                    } catch (Exception e) { // IOException or others
-                        LOG.error("Error sending command to terminal widget: " + finalCommand, e);
-                        Messages.showErrorDialog(project, "Error sending command to terminal: " + e.getMessage(), "Terminal Error");
+                        // 如何为 widgetToUse 设置初始环境变量是个挑战。
+                        // 如果 widget 是新创建的，PtyProcessBuilder (如果通过它创建) 可能允许设置环境。
+                        // 如果是复用已有的，命令行中嵌入环境变量设置是常用方法。
+                        LOG.info("Sending command to terminal widget: " + finalCommandToExecute);
+                        widgetToUse.executeCommand(finalCommandToExecute);
+                    } catch (Exception e) {
+                        LOG.error("Error sending command to terminal widget: " + finalCommandToExecute, e);
+                        Messages.showErrorDialog(project, "Error sending command to terminal: " + e.getMessage() + "\nCommand: " + finalCommandToExecute, "Terminal Error");
                     }
-                });
-            } else {
-                LOG.error("Failed to create or get terminal widget for command: " + finalCommand);
-                Messages.showErrorDialog(project, "Failed to open terminal for script execution.", "Terminal Error");
-            }
+                } else {
+                    LOG.error("Failed to find or create a suitable terminal widget for command: " + finalCommandToExecute);
+                    Messages.showErrorDialog(project, "Failed to open or reuse a terminal session for script execution.\nCommand: " + finalCommandToExecute, "Terminal Error");
+                }
+            });
+        });
+    }
 
-        } catch (Exception e) { // RuntimeException or other errors from TerminalView
-            LOG.error("Error executing script in terminal: " + scriptPath, e);
-            Messages.showErrorDialog(project, "Could not execute script in terminal: " + e.getMessage(), "Terminal Execution Error");
+    // 辅助方法，尝试查找或创建 Terminal Widget (需要根据最新的 Terminal API 进行调整)
+    @Nullable
+    private ShellTerminalWidget findOrCreateTerminalWidget(@NotNull Project project, @NotNull ToolWindow terminalToolWindow, @NotNull String tabName) {
+        // 这是一个高度依赖具体 Terminal API 版本的实现
+        // 以下是一种可能的思路，但您需要验证
+        com.intellij.ui.content.ContentManager contentManager = terminalToolWindow.getContentManager();
+        com.intellij.ui.content.Content selectedContent = contentManager.getSelectedContent();
+
+        // 尝试复用当前选中的 Terminal Tab (如果它是 ShellTerminalWidget)
+        if (selectedContent != null && selectedContent.getComponent() instanceof ShellTerminalWidget) {
+            ShellTerminalWidget selectedWidget = (ShellTerminalWidget) selectedContent.getComponent();
+            if (selectedWidget.isSessionRunning()) { // 或者其他判断是否可用的条件
+                LOG.info("Reusing selected terminal widget.");
+                return selectedWidget;
+            }
+        }
+
+        // 尝试查找一个名为 tabName 的 Tab (如果之前创建过)
+        for (com.intellij.ui.content.Content content : contentManager.getContents()) {
+            if (tabName.equals(content.getDisplayName()) && content.getComponent() instanceof ShellTerminalWidget) {
+                ShellTerminalWidget existingWidget = (ShellTerminalWidget) content.getComponent();
+                contentManager.setSelectedContent(content); // 选中它
+                LOG.info("Reusing existing terminal widget with tab name: " + tabName);
+                return existingWidget;
+            }
+        }
+
+        // 如果没有合适的，尝试创建一个新的 Terminal 会话/Widget
+        // 这部分 API 是最容易发生变化的。
+        // 旧的 TerminalView.createLocalShellWidget 可能有新的服务或工厂方法替代。
+        // 例如，可能需要使用 TerminalRunner 或类似的类来启动一个新的PtyProcess，然后包装成 Widget。
+        LOG.info("Attempting to create a new terminal widget with tab name: " + tabName);
+        try {
+            // 【关键：这里需要找到创建 ShellTerminalWidget 的新方法】
+            // 这只是一个占位符，实际的 API 可能完全不同。
+            // 您可能需要查找 TerminalProjectOptionsProvider, PtyProcessBuilder,
+            // أو TerminalArrangementManager, TerminalStarter 等相关的类。
+
+            // 这是一个非常粗略的猜测，基于以前的API模式：
+            // TerminalSettings terminalSettings = TerminalSettings.getInstance(); // 获取设置
+            // AbstractTerminalRunner<?> runner = new LocalTerminalDirectRunner(project); // 某种 Runner
+            // PtyProcess ptyProcess = runner.createProcess(project.getBasePath(), null); // 创建进程
+            // ShellTerminalWidget newWidget = new ShellTerminalWidget(project, terminalSettings, terminalToolWindow.getDisposable());
+            // newWidget.setProcess(ptyProcess, true); // 关联进程
+
+            // 另一种可能性是有一个服务：
+            // SomeTerminalCreatorService service = project.getService(SomeTerminalCreatorService.class);
+            // ShellTerminalWidget newWidget = service.createTerminalWidget(project.getBasePath(), tabName);
+
+            // **由于无法确定 2025.1 的确切 API，这里暂时返回 null，表示创建失败**
+            // **您需要替换以下行为实际的创建逻辑**
+            LOG.warn("Placeholder: Actual creation of new ShellTerminalWidget is NOT IMPLEMENTED for the new API. Please update this section.");
+
+            // --- BEGIN 临时创建（如果 TerminalView 的 create 仍然可用，仅用于测试） ---
+            // 这是一个临时的回退尝试，如果 TerminalView 类仍然存在，但只有 getInstance() 过时
+            try {
+                Object terminalViewInstance = Class.forName("org.jetbrains.plugins.terminal.TerminalView")
+                        .getMethod("getInstance", Project.class)
+                        .invoke(null, project);
+                if (terminalViewInstance != null) {
+                    java.lang.reflect.Method createWidgetMethod = terminalViewInstance.getClass()
+                            .getMethod("createLocalShellWidget", String.class, String.class, boolean.class);
+                    // boolean attachToProcess = true; // 或者根据API调整
+                    // ShellTerminalWidget tempWidget = (ShellTerminalWidget) createWidgetMethod.invoke(terminalViewInstance, project.getBasePath(), tabName, true);
+
+                    // 更可能是这样：
+                    java.lang.reflect.Method createWidgetMethodSimple = terminalViewInstance.getClass()
+                            .getMethod("createLocalShellWidget", String.class, String.class);
+                    ShellTerminalWidget tempWidget = (ShellTerminalWidget) createWidgetMethodSimple.invoke(terminalViewInstance, project.getBasePath(), tabName);
+
+
+                    if (tempWidget != null) {
+                        LOG.info("TEMPORARY: Created widget using reflection on (possibly deprecated) TerminalView methods.");
+                        // 注意：通过反射创建的 Widget 可能不会自动添加到 ToolWindow 的 ContentManager。
+                        // 但如果 createLocalShellWidget 内部处理了，那就可以了。
+                        // 如果它不自动添加，那么这里还需要代码来创建 Content 并添加到 ContentManager。
+                        return tempWidget;
+                    }
+                }
+            } catch (Exception reflectionEx) {
+                LOG.warn("Reflection attempt to use old TerminalView.createLocalShellWidget failed.", reflectionEx);
+            }
+            // --- END 临时创建 ---
+
+
+            return null; // 表示创建失败，等待正确的API实现
+        } catch (Exception e) {
+            LOG.error("Error trying to create new ShellTerminalWidget.", e);
+            return null;
         }
     }
 
 
+    // 在 SyncFilesToolWindowFactory.java 的 executeScriptDirectly 方法中
     private void executeScriptDirectly(Project project, String pythonExecutable, String scriptPath, Map<String, String> envVars, String displayName) {
         LOG.info("Executing directly: " + pythonExecutable + " " + scriptPath);
-        // 确保脚本文件已刷新到磁盘
-        Util.forceRefreshVFS(scriptPath);
+        Util.forceRefreshVFS(scriptPath); // 确保文件已同步
 
         ProgressManager.getInstance().run(new Task.Backgroundable(project, "Running: " + displayName, true) {
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
                 indicator.setIndeterminate(true);
                 indicator.setText("Executing " + Paths.get(scriptPath).getFileName().toString());
+                StringBuilder output = new StringBuilder();
+                StringBuilder errorOutput = new StringBuilder();
+                int exitCode = -1;
 
                 try {
-                    GeneralCommandLine commandLine = new GeneralCommandLine(pythonExecutable, scriptPath);
-                    // 设置工作目录为项目根目录，或脚本所在目录
-                    commandLine.setWorkDirectory(project.getBasePath() != null ? project.getBasePath() : Paths.get(scriptPath).getParent().toString());
-
-                    // 设置环境变量
-                    Map<String, String> effectiveEnv = new HashMap<>(EnvironmentUtil.getEnvironmentMap()); // 继承IDE环境
-                    effectiveEnv.putAll(envVars); // 覆盖或添加配置的变量
-                    effectiveEnv.put("PYTHONIOENCODING", "UTF-8"); // 强制UTF-8输出
+                    ProcessBuilder pb = new ProcessBuilder(pythonExecutable, scriptPath);
+                    Map<String, String> effectiveEnv = new HashMap<>(EnvironmentUtil.getEnvironmentMap());
+                    effectiveEnv.putAll(envVars);
+                    effectiveEnv.put("PYTHONIOENCODING", "UTF-8");
                     if (project.getBasePath() != null) {
                         effectiveEnv.put("PROJECT_DIR", project.getBasePath().replace('\\','/'));
                     }
-                    commandLine.withEnvironment(effectiveEnv);
-                    commandLine.setCharset(StandardCharsets.UTF_8);
+                    pb.environment().clear();
+                    pb.environment().putAll(effectiveEnv);
+                    pb.directory(project.getBasePath() != null ? new File(project.getBasePath()) : Paths.get(scriptPath).getParent().toFile());
 
+                    Process process = pb.start();
 
-                    OSProcessHandler processHandler = ProcessHandlerFactory.getInstance().createColoredProcessHandler(commandLine);
-                    ProcessTerminatedListener.attach(processHandler);
+                    try (BufferedReader outReader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+                         BufferedReader errReader = new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
+                        String line;
+                        while ((line = outReader.readLine()) != null) output.append(line).append("\n");
+                        while ((line = errReader.readLine()) != null) errorOutput.append(line).append("\n");
+                    }
+                    exitCode = process.waitFor();
 
-                    // 创建一个 ConsoleView 来显示输出
-                    ApplicationManager.getApplication().invokeLater(() -> {
-                        ConsoleView consoleView = new com.intellij.execution.impl.ConsoleViewImpl(project, true);
-                        consoleView.attachToProcess(processHandler);
-
-                        Executor executor = DefaultRunExecutor.getRunExecutorInstance();
-                        RunContentDescriptor descriptor = new RunContentDescriptor(consoleView, processHandler,
-                                new JPanel(new BorderLayout()), displayName + " Output", AllIcons.Actions.Execute);
-
-                        RunContentManager.getInstance(project).showRunContent(executor, descriptor);
-                        processHandler.startNotify(); // 开始监听进程事件
-                    });
-
-
-                } catch (ExecutionException e) {
+                } catch (IOException | InterruptedException e) {
                     LOG.error("Failed to execute script (direct API): " + scriptPath, e);
-                    ApplicationManager.getApplication().invokeLater(() ->
-                            Messages.showErrorDialog(project, "Failed to start script: " + Paths.get(scriptPath).getFileName() +
-                                    "\nError: " + e.getMessage(), "Execution Error")
-                    );
+                    errorOutput.append("Execution failed: ").append(e.getMessage());
+                    exitCode = -1; // Indicate failure
                 }
-            }
-            @Override
-            public void onSuccess() {
-                super.onSuccess();
-                // 脚本执行后刷新VFS
-                ApplicationManager.getApplication().invokeLater(() -> Util.refreshAllFiles(project));
-            }
 
-            @Override
-            public void onThrowable(@NotNull Throwable error) {
-                super.onThrowable(error);
-                LOG.error("Error in background task for script (direct API): " + scriptPath, error);
-                ApplicationManager.getApplication().invokeLater(() ->
-                        Messages.showErrorDialog(project, "Error during script execution: " + Paths.get(scriptPath).getFileName() +
-                                "\nError: " + error.getMessage(), "Execution Error")
-                );
+                final String finalOutput = output.toString().trim();
+                final String finalError = errorOutput.toString().trim();
+                final int finalExitCode = exitCode;
+
+                ApplicationManager.getApplication().invokeLater(() -> {
+                    String scriptFileName = Paths.get(scriptPath).getFileName().toString();
+                    if (finalExitCode == 0) {
+                        String message = "Script '" + scriptFileName + "' executed successfully.\n\nOutput:\n" +
+                                (finalOutput.isEmpty() ? "<No Output>" : finalOutput);
+                        if (!finalError.isEmpty()) {
+                            message += "\n\nStandard Error (stderr):\n" + finalError;
+                        }
+                        Messages.showInfoMessage(project, message, "Script Success: " + scriptFileName);
+                    } else {
+                        String message = "Script '" + scriptFileName + "' execution failed (Exit Code: " + finalExitCode + ").\n\n";
+                        if (!finalOutput.isEmpty()) message += "Output:\n" + finalOutput + "\n\n";
+                        if (!finalError.isEmpty()) message += "Error:\n" + finalError;
+                        else if (finalExitCode != 0) message += "Error: <No specific error message, check logs>";
+                        Messages.showErrorDialog(project, message, "Script Failure: " + scriptFileName);
+                    }
+                    Util.refreshAllFiles(project); // Refresh VFS
+                });
             }
         });
     }

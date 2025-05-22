@@ -16,9 +16,8 @@ import org.jetbrains.annotations.Nullable;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.HashSet;
-import java.util.List;
-import java.util.Set;
+import java.util.*;
+import java.util.stream.Collectors;
 
 public class ProjectDirectoryWatcherService implements Disposable {
     private static final Logger LOG = Logger.getInstance(ProjectDirectoryWatcherService.class);
@@ -69,11 +68,14 @@ public class ProjectDirectoryWatcherService implements Disposable {
         isRunning = true;
 
         connection.subscribe(VirtualFileManager.VFS_CHANGES, new BulkFileListener() {
+            // ... 在 ProjectDirectoryWatcherService.java 的 BulkFileListener.after() 方法内 ...
             @Override
             public void after(@NotNull List<? extends VFileEvent> events) {
                 if (!isRunning || watchedPythonScriptDir == null) return;
 
-                boolean scriptsNeedRefresh = false;
+                boolean scriptsStructureChanged = false; // 用于判断是否需要发 scriptsChanged 通知
+                List<String> newPyFilesRelativeToScriptDir = new ArrayList<>(); // 存储新发现的py文件相对路径
+
                 for (VFileEvent event : events) {
                     VirtualFile file = extractFileFromEvent(event);
                     if (file == null) continue;
@@ -81,41 +83,76 @@ public class ProjectDirectoryWatcherService implements Disposable {
                     String filePath = file.getPath().replace('\\', '/');
                     String parentPath = file.getParent() != null ? file.getParent().getPath().replace('\\', '/') : null;
 
-                    // 检查事件是否发生在被监控的 pythonScriptPath 目录下，或者目录本身发生变化
-                    boolean isRelevant = filePath.equals(watchedPythonScriptDir) || // 目录本身 (例如重命名)
-                            (parentPath != null && parentPath.equals(watchedPythonScriptDir)); // 目录下的文件
-
-                    if (!isRelevant && filePath.startsWith(watchedPythonScriptDir + "/")) { // 检查是否是子目录中的文件
+                    boolean isRelevant = filePath.equals(watchedPythonScriptDir) ||
+                            (parentPath != null && parentPath.equals(watchedPythonScriptDir));
+                    if (!isRelevant && filePath.startsWith(watchedPythonScriptDir + "/")) {
                         isRelevant = true;
                     }
 
-
                     if (isRelevant) {
-                        // 只关心 .py 文件的新增、删除、重命名，或目录结构变化
-                        if (event instanceof VFileCreateEvent ||
-                                event instanceof VFileDeleteEvent ||
+                        String changedFileName = file.getName().toLowerCase();
+                        if (event instanceof VFileCreateEvent && changedFileName.endsWith(".py") && !file.isDirectory()) {
+                            // 新建了 .py 文件
+                            Path scriptBasePath = Paths.get(watchedPythonScriptDir);
+                            Path newFilePath = Paths.get(filePath);
+                            String relativePath = scriptBasePath.relativize(newFilePath).toString().replace('\\', '/');
+                            newPyFilesRelativeToScriptDir.add(relativePath);
+                            scriptsStructureChanged = true; // 结构发生变化
+                            LOG.info("[" + project.getName() + "] New .py file detected: " + relativePath);
+                        } else if (event instanceof VFileDeleteEvent || // 文件删除或重命名也会触发
                                 (event instanceof VFilePropertyChangeEvent && VirtualFile.PROP_NAME.equals(((VFilePropertyChangeEvent) event).getPropertyName())) ||
-                                event instanceof VFileMoveEvent ||
-                                event instanceof VFileCopyEvent) { // VFileCopyEvent 也会创建新文件
-
-                            // 进一步检查是否影响 .py 文件或目录本身
-                            String changedFileName = file.getName().toLowerCase();
+                                event instanceof VFileMoveEvent) {
                             if (changedFileName.endsWith(".py") || file.isDirectory()) {
-                                LOG.info("[" + project.getName() + "] Relevant event in script dir: " +
-                                        event.getClass().getSimpleName() + " on " + filePath + ". Triggering scripts refresh.");
-                                scriptsNeedRefresh = true;
-                                break; // 只要有一个相关事件就足够了
+                                scriptsStructureChanged = true;
                             }
                         }
                     }
                 }
 
-                if (scriptsNeedRefresh) {
+                if (!newPyFilesRelativeToScriptDir.isEmpty()) {
+                    // 在后台线程或 invokeLater 中处理配置修改，避免阻塞VFS事件处理
+                    ApplicationManager.getApplication().invokeLater(() -> {
+                        SyncFilesConfig config = SyncFilesConfig.getInstance(project);
+                        List<ScriptGroup> currentGroups = new ArrayList<>(config.getScriptGroups());
+                        ScriptGroup defaultGroup = currentGroups.stream()
+                                .filter(g -> ScriptGroup.DEFAULT_GROUP_ID.equals(g.id))
+                                .findFirst().orElse(null);
+                        if (defaultGroup == null) { /* ... 处理 ... */ return; }
+
+                        boolean configChanged = false;
+                        Set<String> allConfiguredScriptPaths = currentGroups.stream()
+                                .flatMap(g -> g.scripts.stream())
+                                .map(s -> s.path.toLowerCase())
+                                .collect(Collectors.toSet());
+
+                        for (String newRelativePath : newPyFilesRelativeToScriptDir) {
+                            if (!allConfiguredScriptPaths.contains(newRelativePath.toLowerCase()) &&
+                                    defaultGroup.scripts.stream().noneMatch(s -> s.path.equalsIgnoreCase(newRelativePath))) {
+                                ScriptEntry newEntry = new ScriptEntry(newRelativePath);
+                                newEntry.description = "Auto-added by watcher " + new java.text.SimpleDateFormat("yyyy/MM/dd").format(new Date());
+                                defaultGroup.scripts.add(newEntry);
+                                configChanged = true;
+                                LOG.info("[" + project.getName() + "] Watcher: Added new script '" + newRelativePath + "' to Default group.");
+                            }
+                        }
+
+                        if (configChanged) {
+                            defaultGroup.scripts.sort(Comparator.comparing(s -> s.getDisplayName().toLowerCase()));
+                            config.setScriptGroups(currentGroups);
+                            // scriptsChanged 通知会由下面的逻辑发出，如果 configChanged 为 true，
+                            // tool window 的 updateScriptTree(true) 会扫描并正确显示。
+                            // 或者，如果只想更新而不强制扫描，可以发 configurationChanged，
+                            // 但 যেহেতু文件系统变了，scriptsChanged 更合适。
+                        }
+                    });
+                }
+
+                if (scriptsStructureChanged) { // 只要结构变了（增、删、改名），就通知刷新
                     ApplicationManager.getApplication().invokeLater(() -> {
                         if (!isRunning) return;
-                        LOG.info("[" + project.getName() + "] Publishing scriptsChanged notification.");
+                        LOG.info("[" + project.getName() + "] Publishing scriptsChanged notification due to VFS events.");
                         SyncFilesNotifier publisher = project.getMessageBus().syncPublisher(SyncFilesNotifier.TOPIC);
-                        publisher.scriptsChanged(); // 通知工具窗口更新脚本列表
+                        publisher.scriptsChanged();
                     });
                 }
             }

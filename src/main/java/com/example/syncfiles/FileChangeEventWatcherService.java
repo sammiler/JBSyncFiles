@@ -4,6 +4,7 @@ import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
+import com.intellij.openapi.util.text.StringUtil; // 引入 StringUtil
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.vfs.VirtualFileManager;
@@ -15,13 +16,19 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import java.io.BufferedReader;
+import java.io.File; // 引入 File
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
+import java.nio.file.InvalidPathException; // 引入 InvalidPathException
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.*;
+import java.util.ArrayList;
+import java.util.HashMap; // 引入 HashMap
+import java.util.List;
+import java.util.Map;
+import java.util.Objects;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
@@ -32,7 +39,7 @@ public class FileChangeEventWatcherService implements Disposable {
     private MessageBusConnection connection;
     private boolean isRunning = false;
     private final List<ActiveWatch> activeWatchers = new ArrayList<>();
-    private final ExecutorService scriptExecutorService = Executors.newCachedThreadPool(); // 用于后台执行脚本
+    private final ExecutorService scriptExecutorService = Executors.newCachedThreadPool();
 
     public FileChangeEventWatcherService(Project project) {
         this.project = project;
@@ -40,185 +47,261 @@ public class FileChangeEventWatcherService implements Disposable {
     }
 
     public synchronized void updateWatchersFromConfig() {
-        LOG.info("[" + project.getName() + "] Updating watchers from config.");
+        String projectName = project.getName(); // 用于日志，避免重复调用 project.getName()
+        LOG.info("[" + projectName + "] Updating watchers from config.");
         stopWatching(); // 停止当前的监听
         activeWatchers.clear();
 
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
         String pythonExecutable = config.getPythonExecutablePath();
-        String pythonScriptBaseDir = config.getPythonScriptPath();
+        String pythonScriptBaseDir = config.getPythonScriptPath(); // 这是全局脚本目录
 
-        if (pythonExecutable == null || pythonExecutable.trim().isEmpty()) {
-            LOG.warn("[" + project.getName() + "] Python executable is not configured. File event watching will be disabled.");
+        // 检查 Python 执行文件路径
+        if (StringUtil.isEmptyOrSpaces(pythonExecutable)) {
+            LOG.warn("[" + projectName + "] Python executable is not configured. File event watching will be disabled.");
             return;
         }
-        if (!Files.isRegularFile(Paths.get(pythonExecutable))) {
-            LOG.warn("[" + project.getName() + "] Python executable path is invalid: " + pythonExecutable + ". File event watching will be disabled.");
+        try {
+            if (!Files.isRegularFile(Paths.get(pythonExecutable))) {
+                LOG.warn("[" + projectName + "] Python executable path is invalid or not a file: '" + pythonExecutable + "'. File event watching will be disabled.");
+                return;
+            }
+        } catch (InvalidPathException e) {
+            LOG.warn("[" + projectName + "] Python executable path format is invalid: '" + pythonExecutable + "'. Error: " + e.getMessage() + ". File event watching will be disabled.");
             return;
         }
-
 
         List<WatchEntry> configuredEntries = config.getWatchEntries();
         if (configuredEntries.isEmpty()) {
-            LOG.info("[" + project.getName() + "] No watch entries configured.");
+            LOG.info("[" + projectName + "] No watch entries configured.");
             return;
         }
 
+        String projectBasePath = project.getBasePath(); // 获取项目根路径，用于解析相对路径
+
         for (WatchEntry entry : configuredEntries) {
-            String watchedPathStr = entry.watchedPath;
-            String scriptToRunRelative = entry.onEventScript;
+            String watchedPathInput = entry.watchedPath; // 用户在UI上输入的路径
+            String scriptToRunPathInput = entry.onEventScript; // 用户输入的脚本路径 (可能是相对或绝对)
 
-            if (watchedPathStr == null || watchedPathStr.trim().isEmpty() ||
-                    scriptToRunRelative == null || scriptToRunRelative.trim().isEmpty()) {
-                LOG.warn("[" + project.getName() + "] Skipping invalid watch entry: " + entry);
+            if (StringUtil.isEmptyOrSpaces(watchedPathInput) ||
+                    StringUtil.isEmptyOrSpaces(scriptToRunPathInput)) {
+                LOG.warn("[" + projectName + "] Skipping invalid watch entry due to empty paths. Watched: '" + watchedPathInput + "', Script: '" + scriptToRunPathInput + "'");
                 continue;
             }
 
-            Path fullScriptPath;
-            if (Paths.get(scriptToRunRelative).isAbsolute()) {
-                fullScriptPath = Paths.get(scriptToRunRelative);
-            } else if (pythonScriptBaseDir != null && !pythonScriptBaseDir.trim().isEmpty()) {
-                fullScriptPath = Paths.get(pythonScriptBaseDir, scriptToRunRelative);
+            // --- 1. 解析和规范化 scriptToRunPathInput (要执行的脚本路径) ---
+            Path fullScriptPathToExecute;
+            try {
+                Path tempScriptPath = Paths.get(scriptToRunPathInput.replace('\\', '/'));
+                if (tempScriptPath.isAbsolute()) {
+                    fullScriptPathToExecute = tempScriptPath.normalize();
+                } else if (!StringUtil.isEmptyOrSpaces(pythonScriptBaseDir)) {
+                    // 脚本路径是相对的，且全局脚本目录已配置
+                    fullScriptPathToExecute = Paths.get(pythonScriptBaseDir.replace('\\','/'), scriptToRunPathInput.replace('\\', '/')).normalize();
+                } else {
+                    LOG.warn("[" + projectName + "] Cannot resolve relative 'Python Script on Modify': '" + scriptToRunPathInput +
+                            "' for 'Path to Watch': '" + watchedPathInput +
+                            "' because 'Python Scripts Directory' is not set. Skipping this watch entry.");
+                    continue;
+                }
+
+                if (!Files.isRegularFile(fullScriptPathToExecute)) {
+                    LOG.warn("[" + projectName + "] Script for 'Path to Watch' '" + watchedPathInput +
+                            "' does not exist or is not a file: '" + fullScriptPathToExecute + "'. Skipping this watch entry.");
+                    continue;
+                }
+            } catch (InvalidPathException e) {
+                LOG.warn("[" + projectName + "] Invalid format for 'Python Script on Modify': '" + scriptToRunPathInput +
+                        "' for 'Path to Watch': '" + watchedPathInput + "'. Error: " + e.getMessage() + ". Skipping this watch entry.");
+                continue;
+            }
+            // --- scriptToRunPathInput 解析结束 ---
+
+
+            // --- 2. 解析和规范化 watchedPathInput (要监控的路径) ---
+            Path absoluteWatchedPathObject;
+            try {
+                Path tempWatchedPath = Paths.get(watchedPathInput.replace('\\', '/'));
+                if (tempWatchedPath.isAbsolute()) {
+                    absoluteWatchedPathObject = tempWatchedPath.normalize();
+                } else {
+                    if (!StringUtil.isEmptyOrSpaces(projectBasePath)) {
+                        absoluteWatchedPathObject = Paths.get(projectBasePath.replace('\\','/'), watchedPathInput.replace('\\', '/')).normalize();
+                    } else {
+                        LOG.warn("[" + projectName + "] Cannot resolve relative 'Path to Watch': '" + watchedPathInput +
+                                "' because project base path is unavailable. Skipping this watch entry.");
+                        continue;
+                    }
+                }
+            } catch (InvalidPathException e) {
+                LOG.warn("[" + projectName + "] Invalid format for 'Path to Watch': '" + watchedPathInput +
+                        "'. Error: " + e.getMessage() + ". Skipping this watch entry.");
+                continue;
+            }
+
+            String finalNormalizedAbsWatchedPath = absoluteWatchedPathObject.toString().replace('\\', '/'); // 确保最终是 / 分隔符
+            // --- watchedPathInput 解析结束 ---
+
+
+            // 检查解析后的被监控路径是否存在以及是否为目录
+            boolean isDirectory = false;
+            boolean pathExists = Files.exists(absoluteWatchedPathObject);
+            if (pathExists) {
+                isDirectory = Files.isDirectory(absoluteWatchedPathObject);
             } else {
-                LOG.warn("[" + project.getName() + "] Cannot resolve relative script path '" + scriptToRunRelative + "' because Python script base directory is not set. Skipping watch entry.");
-                continue;
+                LOG.warn("[" + projectName + "] 'Path to Watch': '" + finalNormalizedAbsWatchedPath +
+                        "' currently does not exist. Watch will be added, but may only trigger correctly if it's created as a file, or if its parent is watched and it's created within.");
             }
 
-            if (!Files.isRegularFile(fullScriptPath)) {
-                LOG.warn("[" + project.getName() + "] Script for watch entry does not exist or is not a file: " + fullScriptPath + ". Skipping.");
-                continue;
-            }
+            activeWatchers.add(new ActiveWatch(
+                    finalNormalizedAbsWatchedPath,
+                    fullScriptPathToExecute.toString().replace('\\', '/'),
+                    isDirectory
+            ));
 
-            // 规范化被监控路径
-            String normalizedWatchedPath = Paths.get(watchedPathStr.replace('\\','/')).normalize().toString();
-            activeWatchers.add(new ActiveWatch(normalizedWatchedPath, fullScriptPath.toString().replace('\\', '/')));
-            LOG.info("[" + project.getName() + "] Added watch for: " + normalizedWatchedPath + " -> " + fullScriptPath);
+            String typeMsg = pathExists ? (isDirectory ? " (Directory)" : " (File)") : " (Path currently non-existent)";
+            LOG.info("[" + projectName + "] Added watch for: '" + finalNormalizedAbsWatchedPath + "'" + typeMsg +
+                    " -> executes '" + fullScriptPathToExecute.toString().replace('\\', '/') + "'");
         }
 
         if (!activeWatchers.isEmpty()) {
             startWatching();
+        } else {
+            LOG.info("[" + projectName + "] No active watchers were configured after processing entries.");
         }
     }
 
     private synchronized void startWatching() {
+        String projectName = project.getName();
         if (isRunning || activeWatchers.isEmpty()) {
-            if (isRunning) LOG.info("[" + project.getName() + "] Watcher already running.");
+            if (isRunning) LOG.info("[" + projectName + "] Watcher already running.");
+            if (activeWatchers.isEmpty() && !isRunning) LOG.info("[" + projectName + "] No active watchers to start.");
             return;
         }
 
-        LOG.info("[" + project.getName() + "] Starting FileChangeEventWatcherService...");
-        connection = project.getMessageBus().connect(this); // 关联到 service 的生命周期
+        LOG.info("[" + projectName + "] Starting FileChangeEventWatcherService...");
+        connection = project.getMessageBus().connect(this);
         isRunning = true;
 
         connection.subscribe(VirtualFileManager.VFS_CHANGES, new BulkFileListener() {
             @Override
             public void after(@NotNull List<? extends VFileEvent> events) {
                 if (!isRunning) return;
-
                 for (VFileEvent event : events) {
                     processVfsEvent(event);
                 }
             }
         });
-        LOG.info("[" + project.getName() + "] FileChangeEventWatcherService started. Watching " + activeWatchers.size() + " configurations.");
+        LOG.info("[" + projectName + "] FileChangeEventWatcherService started. Watching " + activeWatchers.size() + " configurations.");
     }
 
     private void processVfsEvent(@NotNull VFileEvent event) {
+        String projectName = project.getName();
         String eventType = null;
-        VirtualFile affectedVFile = null;
-        String affectedPath = null; // 事件影响的绝对路径
+        String affectedPath = null; // VFS 事件原始路径
 
         // 从事件中提取类型和路径
         if (event instanceof VFileCreateEvent) {
             eventType = "Change New";
-            affectedVFile = ((VFileCreateEvent) event).getFile(); // 新创建的文件/目录
-            if (affectedVFile != null) {
-                affectedPath = affectedVFile.getPath();
-            } else { // 有时 getFile() 为空，尝试从 path 构建
-                affectedPath = ((VFileCreateEvent) event).getPath();
-            }
+            affectedPath = ((VFileCreateEvent) event).getPath(); // 获取路径字符串
         } else if (event instanceof VFileContentChangeEvent) {
             eventType = "Change Mod";
-            affectedVFile = event.getFile();
-            if (affectedVFile != null) affectedPath = affectedVFile.getPath();
+            VirtualFile vf = event.getFile();
+            if (vf != null) affectedPath = vf.getPath();
         } else if (event instanceof VFileDeleteEvent) {
             eventType = "Change Del";
-            affectedVFile = event.getFile(); // 文件可能已无效，但路径仍有用
-            if (affectedVFile != null) affectedPath = affectedVFile.getPath();
+            VirtualFile vf = event.getFile(); // 文件可能已无效，但路径仍有用
+            if (vf != null) affectedPath = vf.getPath();
         } else if (event instanceof VFileMoveEvent) {
-            // 移动事件比较复杂，可能同时触发旧路径的删除和新路径的创建
-            // 这里简单处理为修改事件，并使用移动后的路径
-            eventType = "Change Mod"; // 或根据需要处理为 Delete + New
-            affectedVFile = event.getFile(); // 移动后的文件
-            if (affectedVFile != null) affectedPath = affectedVFile.getPath();
+            eventType = "Change Mod"; // 简单处理为修改，使用移动后的路径
+            VirtualFile vf = event.getFile();
+            if (vf != null) affectedPath = vf.getPath();
         } else if (event instanceof VFileCopyEvent) {
-            eventType = "Change New"; // 复制等同于创建新文件
-            affectedVFile = ((VFileCopyEvent) event).findCreatedFile();
-            if (affectedVFile != null) affectedPath = affectedVFile.getPath();
+            eventType = "Change New";
+            VirtualFile vf = ((VFileCopyEvent) event).findCreatedFile();
+            if (vf != null) affectedPath = vf.getPath();
         } else if (event instanceof VFilePropertyChangeEvent) {
             if (VirtualFile.PROP_NAME.equals(((VFilePropertyChangeEvent) event).getPropertyName())) {
-                eventType = "Change Mod"; // 重命名视为修改 (或者 Delete old, New new)
-                // (VFilePropertyChangeEvent)event).getOldValue() 和 .getNewValue() 可以获取旧名和新名
-                affectedVFile = event.getFile(); // 重命名后的文件
-                if (affectedVFile != null) affectedPath = affectedVFile.getPath();
+                eventType = "Change Mod"; // 重命名视为修改
+                VirtualFile vf = event.getFile();
+                if (vf != null) affectedPath = vf.getPath();
             }
         }
 
+        // 在 FileChangeEventWatcherService.processVfsEvent()
+
+// ... (从 VFileEvent 获取 affectedPath 字符串) ...
         if (eventType == null || affectedPath == null) {
-            return; // 不处理此事件
+            return;
         }
 
-        final String finalAffectedPath = Paths.get(affectedPath.replace('\\','/')).normalize().toString();
+        final String finalAffectedPath;
+        try {
+            // 1. 确保原始 affectedPath 中的反斜杠被替换为正斜杠
+            String pathWithForwardSlashes = affectedPath.replace('\\', '/');
+            // 2. 使用 Paths.get().normalize() 来处理 ".." 和 "." 等，并获得规范路径对象
+            Path normalizedPathObject = Paths.get(pathWithForwardSlashes).normalize();
+            // 3. 将规范化的 Path 对象转换为字符串，并再次确保是正斜杠
+            finalAffectedPath = normalizedPathObject.toString().replace('\\', '/');
+        } catch (InvalidPathException e) {
+            LOG.warn("[" + projectName + "] Invalid path from VFS event: '" + affectedPath + "'. Error: " + e.getMessage() + ". Skipping event.");
+            return;
+        }
         final String finalEventType = eventType;
 
-        // 检查是否与任何 activeWatchers 匹配
+// ... 后续的 filter 逻辑 ...
+// 在 filter 的 lambda 表达式中，watch.watchedPath 也应该是使用 '/' 的绝对规范路径
+
         List<ActiveWatch> matchedWatchers = activeWatchers.stream()
-                .filter(watch -> finalAffectedPath.equals(watch.watchedPath) || // 精确匹配文件/目录本身
-                        finalAffectedPath.startsWith(watch.watchedPath + "/") || // 匹配子文件/目录
-                        (Paths.get(finalAffectedPath).getParent() != null && // 匹配父目录（例如在被监控目录下创建/删除文件）
-                                Paths.get(finalAffectedPath).getParent().normalize().toString().equals(watch.watchedPath))
-                )
+                .filter(watch -> {
+                    if (finalAffectedPath.equals(watch.watchedPath)) {
+                        return true;
+                    }
+                    if (watch.isDirectory) {
+                        Path watchedDirObj = Paths.get(watch.watchedPath);
+                        Path affectedPathObj = Paths.get(finalAffectedPath);
+                        if (affectedPathObj.getParent() != null && affectedPathObj.getParent().equals(watchedDirObj)) {
+                            return true;
+                        }
+                        if (finalAffectedPath.startsWith(watch.watchedPath + "/")) {
+                            return true;
+                        }
+                    }
+                    return false;
+                })
                 .collect(Collectors.toList());
 
         if (!matchedWatchers.isEmpty()) {
-            LOG.info("[" + project.getName() + "] Relevant VFS Event: " + event.getClass().getSimpleName() +
-                    " | Type: " + finalEventType + " | Path: " + finalAffectedPath);
+            LOG.info("[" + projectName + "] Relevant VFS Event: " + event.getClass().getSimpleName() +
+                    " | Type: " + finalEventType + " | Path: " + finalAffectedPath +
+                    " | Matched " + matchedWatchers.size() + " watchers.");
 
             for (ActiveWatch watcher : matchedWatchers) {
-                LOG.info("[" + project.getName() + "] Matched watch: " + watcher.watchedPath + " -> " + watcher.scriptToRun);
+                LOG.info("[" + projectName + "] Matched watch: '" + watcher.watchedPath + "' -> executes '" + watcher.scriptToRun + "'");
                 executeWatchedScript(watcher.scriptToRun, finalEventType, finalAffectedPath);
             }
         }
     }
 
-    private void executeWatchedScript(String scriptPath, String eventType, String affectedFilePath) {
+
+    private void executeWatchedScript(String scriptPathToExecute, String eventType, String affectedFilePath) {
+        String projectName = project.getName();
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
-        String pythonExecutable = config.getPythonExecutablePath();
-
-        if (pythonExecutable == null || pythonExecutable.trim().isEmpty()) {
-            LOG.error("[" + project.getName() + "] Cannot execute script " + scriptPath + " because Python executable is not set.");
-            return;
-        }
-        if (!Files.isRegularFile(Paths.get(pythonExecutable))) {
-            LOG.error("[" + project.getName() + "] Cannot execute script " + scriptPath + " because Python executable is invalid: "+ pythonExecutable);
-            return;
-        }
-
+        String pythonExecutable = config.getPythonExecutablePath(); // 已在 updateWatchersFromConfig 验证过
 
         scriptExecutorService.submit(() -> {
-            LOG.info("[" + project.getName() + "] Executing script for file event: " + scriptPath +
-                    " with args: [" + eventType + ", " + affectedFilePath + "]");
+            LOG.info("[" + projectName + "] Executing script for file event: '" + scriptPathToExecute +
+                    "' with args: [" + eventType + ", " + affectedFilePath + "]");
             try {
                 ProcessBuilder pb = new ProcessBuilder(
                         pythonExecutable,
-                        scriptPath,
+                        scriptPathToExecute,
                         eventType,
-                        affectedFilePath.replace('\\','/') // 确保路径分隔符为 /
+                        affectedFilePath // affectedFilePath 已经是 / 分隔的绝对规范路径
                 );
 
-                // 设置环境变量
-                Map<String, String> envVars = new HashMap<>(EnvironmentUtil.getEnvironmentMap()); // 继承当前环境
-                envVars.putAll(config.getEnvVariables()); // 添加配置的环境变量
+                Map<String, String> envVars = new HashMap<>(EnvironmentUtil.getEnvironmentMap());
+                envVars.putAll(config.getEnvVariables());
                 envVars.put("PYTHONIOENCODING", "UTF-8");
                 if (project.getBasePath() != null) {
                     envVars.put("PROJECT_DIR", project.getBasePath().replace('\\','/'));
@@ -226,84 +309,75 @@ public class FileChangeEventWatcherService implements Disposable {
                 pb.environment().clear();
                 pb.environment().putAll(envVars);
 
-
-                // 重定向工作目录到项目根目录（如果需要）
-                // if (project.getBasePath() != null) {
-                //     pb.directory(new File(project.getBasePath()));
-                // }
-
+                if (project.getBasePath() != null) {
+                    pb.directory(new File(project.getBasePath()));
+                } else {
+                    // Fallback CWD if project base path is null
+                    Path scriptFile = Paths.get(scriptPathToExecute);
+                    if (scriptFile.getParent() != null) {
+                        pb.directory(scriptFile.getParent().toFile());
+                    }
+                }
 
                 Process process = pb.start();
-
                 StringBuilder output = new StringBuilder();
                 StringBuilder errorOutput = new StringBuilder();
 
-                // 读取标准输出
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8))) {
+                try (BufferedReader outReader = new BufferedReader(new InputStreamReader(process.getInputStream(), StandardCharsets.UTF_8));
+                     BufferedReader errReader = new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
                     String line;
-                    while ((line = reader.readLine()) != null) {
-                        output.append(line).append(System.lineSeparator());
-                    }
+                    while ((line = outReader.readLine()) != null) output.append(line).append(System.lineSeparator());
+                    while ((line = errReader.readLine()) != null) errorOutput.append(line).append(System.lineSeparator());
                 }
-                // 读取错误输出
-                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
-                    String line;
-                    while ((line = reader.readLine()) != null) {
-                        errorOutput.append(line).append(System.lineSeparator());
-                    }
-                }
-
                 int exitCode = process.waitFor();
-                if (exitCode == 0) {
-                    LOG.info("[" + project.getName() + "] Script " + Paths.get(scriptPath).getFileName() + " executed successfully for event " + eventType + " on " + affectedFilePath +
-                            (output.length() > 0 ? ". Output:\n" + output : ""));
-                } else {
-                    LOG.warn("[" + project.getName() + "] Script " + Paths.get(scriptPath).getFileName() + " execution failed for event " + eventType + " on " + affectedFilePath +
-                            " (Exit Code: " + exitCode + ")" +
-                            (output.length() > 0 ? ". Output:\n" + output : "") +
-                            (errorOutput.length() > 0 ? ". Error:\n" + errorOutput : ""));
-                }
 
-                // 脚本执行后刷新VFS，确保IDE能看到脚本可能产生的文件变化
+                String scriptFileName = Paths.get(scriptPathToExecute).getFileName().toString();
+                if (exitCode == 0) {
+                    LOG.info("[" + projectName + "] Script '" + scriptFileName + "' executed successfully for event '" + eventType + "' on '" + affectedFilePath + "'" +
+                            (output.length() > 0 ? ". Output:\n" + output.toString().trim() : ""));
+                } else {
+                    LOG.warn("[" + projectName + "] Script '" + scriptFileName + "' execution failed for event '" + eventType + "' on '" + affectedFilePath +
+                            "' (Exit Code: " + exitCode + ")" +
+                            (output.length() > 0 ? ". Output:\n" + output.toString().trim() : "") +
+                            (errorOutput.length() > 0 ? ". Error:\n" + errorOutput.toString().trim() : ""));
+                }
+                Util.refreshAllFiles(project);
                 ApplicationManager.getApplication().invokeLater(() -> {
+                    // Refresh the VFS for the affected path
+                    // Util.refreshPath(affectedFilePath); // 假设有一个 Util 方法
                     VirtualFile changedFile = LocalFileSystem.getInstance().refreshAndFindFileByPath(affectedFilePath);
                     if (changedFile != null) {
-                        changedFile.refresh(false, true); // 异步，递归刷新
+                        changedFile.refresh(false, true); // Async, recursive
                     } else {
-                        // 如果文件被删除，尝试刷新其父目录
-                        Path parentPath = Paths.get(affectedFilePath).getParent();
-                        if (parentPath != null) {
-                            VirtualFile parentDir = LocalFileSystem.getInstance().refreshAndFindFileByPath(parentPath.toString());
-                            if (parentDir != null) {
-                                parentDir.refresh(false, true);
-                            }
+                        Path parentOfAffected = Paths.get(affectedFilePath).getParent();
+                        if (parentOfAffected != null) {
+                            VirtualFile parentDir = LocalFileSystem.getInstance().refreshAndFindFileByPath(parentOfAffected.toString());
+                            if (parentDir != null) parentDir.refresh(false, true);
                         }
                     }
-                    // 也可以考虑刷新整个项目 Util.refreshAllFiles(project);
                 });
 
-
             } catch (IOException | InterruptedException e) {
-                LOG.error("[" + project.getName() + "] Error executing watched script " + scriptPath + ": " + e.getMessage(), e);
+                LOG.error("[" + projectName + "] Error executing watched script '" + scriptPathToExecute + "': " + e.getMessage(), e);
             }
         });
     }
 
-
     private synchronized void stopWatching() {
+        String projectName = project.getName();
         if (!isRunning) return;
-        LOG.info("[" + project.getName() + "] Stopping FileChangeEventWatcherService...");
+        LOG.info("[" + projectName + "] Stopping FileChangeEventWatcherService...");
         isRunning = false;
         if (connection != null) {
             try {
                 connection.disconnect();
             } catch (Exception e) {
-                LOG.error("[" + project.getName() + "] Error disconnecting MessageBus: " + e.getMessage(), e);
+                LOG.error("[" + projectName + "] Error disconnecting MessageBus: " + e.getMessage(), e);
             } finally {
                 connection = null;
             }
         }
-        LOG.info("[" + project.getName() + "] FileChangeEventWatcherService stopped.");
+        LOG.info("[" + projectName + "] FileChangeEventWatcherService stopped.");
     }
 
     @Override
@@ -311,18 +385,20 @@ public class FileChangeEventWatcherService implements Disposable {
         LOG.info("Disposing FileChangeEventWatcherService for project: " + project.getName());
         stopWatching();
         activeWatchers.clear();
-        scriptExecutorService.shutdownNow(); // 强制关闭线程池
+        if (!scriptExecutorService.isShutdown()) {
+            scriptExecutorService.shutdownNow();
+        }
     }
 
-    // 内部类，用于存储活跃的监控配置
     private static class ActiveWatch {
-        final String watchedPath; // 规范化的被监控路径
-        final String scriptToRun; // 规范化的脚本完整路径
+        final String watchedPath;
+        final String scriptToRun;
+        final boolean isDirectory;
 
-        ActiveWatch(String watchedPath, String scriptToRun) {
+        ActiveWatch(String watchedPath, String scriptToRun, boolean isDirectory) {
             this.watchedPath = watchedPath;
             this.scriptToRun = scriptToRun;
+            this.isDirectory = isDirectory;
         }
-        // equals and hashCode if added to Set
     }
 }
