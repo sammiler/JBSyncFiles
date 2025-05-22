@@ -10,7 +10,7 @@ java {
     }
 }
 group = "com.example"
-version = "3.4-SNAPSHOT"
+version = "4.0-SNAPSHOT"
 
 repositories {
     mavenCentral()
@@ -24,6 +24,7 @@ dependencies {
         create("IC", "2025.1") // 目标平台
         // testFramework(org.jetbrains.intellij.platform.gradle.TestFrameworkType.Platform)
         // bundledPlugin("com.intellij.java")
+        bundledPlugin("org.jetbrains.plugins.terminal")
     }
     // implementation("...")
 }
@@ -59,6 +60,7 @@ tasks {
     withType<JavaCompile> {
         sourceCompatibility = "21"
         targetCompatibility = "21"
+        options.compilerArgs.add("-Xlint:deprecation")
     }
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
         kotlinOptions.jvmTarget = "21"

@@ -2,238 +2,165 @@ package com.example.syncfiles;
 
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationManager;
+import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.vfs.*;
+import com.intellij.openapi.vfs.LocalFileSystem;
+import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.openapi.vfs.VirtualFileManager;
 import com.intellij.openapi.vfs.newvfs.BulkFileListener;
 import com.intellij.openapi.vfs.newvfs.events.*;
 import com.intellij.util.messages.MessageBusConnection;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
-import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
-import java.util.concurrent.ConcurrentHashMap;
 
-// Project Level Service - one instance per project
 public class ProjectDirectoryWatcherService implements Disposable {
+    private static final Logger LOG = Logger.getInstance(ProjectDirectoryWatcherService.class);
     private final Project project;
-    private final Set<String> watchedDirectories = ConcurrentHashMap.newKeySet(); // Absolute paths
     private MessageBusConnection connection;
-    private boolean running = false;
-    private final ConcurrentHashMap<Path, Boolean> watchedDirExists = new ConcurrentHashMap<>();
+    private boolean isRunning = false;
+    // 只监控 pythonScriptPath 目录
+    private String watchedPythonScriptDir = null; // 存储规范化的绝对路径
 
-    // Constructor called by IntelliJ framework
     public ProjectDirectoryWatcherService(Project project) {
         this.project = project;
-        System.out.println("ProjectDirectoryWatcherService created for project: " + project.getName());
+        LOG.info("ProjectDirectoryWatcherService created for project: " + project.getName());
     }
 
-    public void updateWatchedDirectories() {
-        System.out.println("Updating watched directories for project: " + project.getName());
+    public synchronized void updateWatchedDirectories() {
+        LOG.info("[" + project.getName() + "] Updating watched Python script directory.");
+        stopWatching(); // 停止旧的监听
+
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
         String scriptPathStr = config.getPythonScriptPath();
-        if (scriptPathStr == null || scriptPathStr.isEmpty())
-        {
-            scriptPathStr = SyncFilesSettingsConfigurable.applyScriptPath;
-        }
-        // Clear existing watches before adding new ones
-        // Note: Actual stop/start might be needed if VFS listener setup is complex,
-        // but for simple path checking, updating the set might suffice.
-        // Let's restart the listener for simplicity and robustness.
-        stopWatching();
-        watchedDirectories.clear(); // Clear the set
 
-        if (scriptPathStr != null && !scriptPathStr.isEmpty())
-        {
-            Path scriptPath = Paths.get(scriptPathStr);
-            addWatch(scriptPath);
-            if (Files.exists(scriptPath)) // If it's a file, watch its parent directory
-            {
-                Path parentDir = scriptPath.getParent();
-                if (parentDir != null)
-                {
-                    addWatch(parentDir);
-                }
-            }
-            else
-            {
-                System.err.println("Python script path does not exist or is invalid: " + scriptPathStr);
-            }
-        }
-        else
-        {
-            System.out.println("Python script path is empty, no directory will be watched.");
-        }
-
-
-        startWatching(); // Start with the updated set of directories
-    }
-
-    private void addWatch(Path dir) {
-        if (dir == null) return;
-        String pathStr = dir.toAbsolutePath().normalize().toString().replace('\\', '/');
-        watchedDirExists.put(dir, Files.exists(dir));
-        if (watchedDirectories.add(pathStr)) {
-            System.out.println("[" + project.getName() + "] Added watch for directory: " + pathStr);
-        }
-    }
-
-    private void startWatching() {
-        if (running) {
-            System.out.println("[" + project.getName() + "] Watcher already running.");
+        if (scriptPathStr == null || scriptPathStr.trim().isEmpty()) {
+            LOG.info("[" + project.getName() + "] Python script path is empty, no directory will be watched by ProjectDirectoryWatcherService.");
+            this.watchedPythonScriptDir = null;
             return;
         }
-        if (watchedDirectories.isEmpty()) {
-            System.out.println("[" + project.getName() + "] No directories to watch.");
-            return; // Don't start if there's nothing to watch
+
+        Path scriptPathObj = Paths.get(scriptPathStr);
+        if (!Files.isDirectory(scriptPathObj)) {
+            LOG.warn("[" + project.getName() + "] Python script path is not a valid directory: " + scriptPathStr + ". No directory will be watched.");
+            this.watchedPythonScriptDir = null;
+            return;
         }
 
-        System.out.println("[" + project.getName() + "] Starting directory watcher...");
-        // Connect to the project's message bus and associate with this service (Disposable)
+        this.watchedPythonScriptDir = scriptPathObj.toAbsolutePath().normalize().toString().replace('\\', '/');
+        LOG.info("[" + project.getName() + "] Will watch Python script directory: " + this.watchedPythonScriptDir);
+        startWatching();
+    }
+
+    private synchronized void startWatching() {
+        if (isRunning || this.watchedPythonScriptDir == null) {
+            if (isRunning) LOG.info("[" + project.getName() + "] ProjectDirectoryWatcherService already running for script dir.");
+            return;
+        }
+
+        LOG.info("[" + project.getName() + "] Starting ProjectDirectoryWatcherService for script dir: " + this.watchedPythonScriptDir);
         connection = project.getMessageBus().connect(this);
-        running = true;
+        isRunning = true;
 
         connection.subscribe(VirtualFileManager.VFS_CHANGES, new BulkFileListener() {
             @Override
             public void after(@NotNull List<? extends VFileEvent> events) {
-                // Prevent processing if watcher stopped concurrently
-                if (!running) return;
+                if (!isRunning || watchedPythonScriptDir == null) return;
 
-                boolean refreshNeeded = false;
+                boolean scriptsNeedRefresh = false;
                 for (VFileEvent event : events) {
                     VirtualFile file = extractFileFromEvent(event);
                     if (file == null) continue;
 
                     String filePath = file.getPath().replace('\\', '/');
+                    String parentPath = file.getParent() != null ? file.getParent().getPath().replace('\\', '/') : null;
 
-                    // Check if the changed file is within any of the watched directories for THIS project
-                    boolean isRelevant = watchedDirectories.stream().anyMatch(watchedDir -> filePath.startsWith(watchedDir + "/"));
-                    // Also check if the changed file *is* one of the watched directories itself (e.g., directory rename)
-                    isRelevant = isRelevant || watchedDirectories.contains(filePath);
-                    // Also check if the changed item's *parent* is watched (for creates/deletes directly under watched folder)
-                    if (!isRelevant && file.getParent() != null) {
-                        String parentPath = file.getParent().getPath().replace('\\','/');
-                        isRelevant = watchedDirectories.contains(parentPath) || watchedDirChanged();
+                    // 检查事件是否发生在被监控的 pythonScriptPath 目录下，或者目录本身发生变化
+                    boolean isRelevant = filePath.equals(watchedPythonScriptDir) || // 目录本身 (例如重命名)
+                            (parentPath != null && parentPath.equals(watchedPythonScriptDir)); // 目录下的文件
+
+                    if (!isRelevant && filePath.startsWith(watchedPythonScriptDir + "/")) { // 检查是否是子目录中的文件
+                        isRelevant = true;
                     }
 
 
-//                     System.out.println("[" + project.getName() + "] VFS Event: " + event.getClass().getSimpleName() + " Path: " + filePath + " Relevant: " + isRelevant);
+                    if (isRelevant) {
+                        // 只关心 .py 文件的新增、删除、重命名，或目录结构变化
+                        if (event instanceof VFileCreateEvent ||
+                                event instanceof VFileDeleteEvent ||
+                                (event instanceof VFilePropertyChangeEvent && VirtualFile.PROP_NAME.equals(((VFilePropertyChangeEvent) event).getPropertyName())) ||
+                                event instanceof VFileMoveEvent ||
+                                event instanceof VFileCopyEvent) { // VFileCopyEvent 也会创建新文件
 
-
-                    if (!isRelevant) continue;
-
-                    // Relevant event detected
-                    System.out.println("[" + project.getName() + "] Relevant VFS Event: " + event.getClass().getSimpleName() + " Path: " + filePath);
-
-
-                    // Check if it's a Python file change or a directory change within the watched roots
-                    if (file.getName().toLowerCase().endsWith(".py") || file.isDirectory()) {
-                        System.out.println("[" + project.getName() + "] Python file or directory changed: " + filePath + ". Triggering refresh.");
-                        refreshNeeded = true;
-                        // Optimization: break if we already know a refresh is needed
-                        break;
+                            // 进一步检查是否影响 .py 文件或目录本身
+                            String changedFileName = file.getName().toLowerCase();
+                            if (changedFileName.endsWith(".py") || file.isDirectory()) {
+                                LOG.info("[" + project.getName() + "] Relevant event in script dir: " +
+                                        event.getClass().getSimpleName() + " on " + filePath + ". Triggering scripts refresh.");
+                                scriptsNeedRefresh = true;
+                                break; // 只要有一个相关事件就足够了
+                            }
+                        }
                     }
                 }
 
-                // ProjectDirectoryWatcherService.java - in the invokeLater block after refreshNeeded is true
-                if (refreshNeeded) {
+                if (scriptsNeedRefresh) {
                     ApplicationManager.getApplication().invokeLater(() -> {
-                        if (!running) { /* ... */ return; }
-                        // 使用 Service 的 final project 字段
-
-                        // ★★★ 发布消息，而不是获取 Factory ★★★
+                        if (!isRunning) return;
+                        LOG.info("[" + project.getName() + "] Publishing scriptsChanged notification.");
                         SyncFilesNotifier publisher = project.getMessageBus().syncPublisher(SyncFilesNotifier.TOPIC);
-                        publisher.scriptsChanged();
-
-                        // ---- 不再需要下面的代码 ----
-                        // SyncFilesToolWindowFactory factory = Util.getOrInitFactory(projectForRefresh);
-                        // if (factory != null) {
-                        //     factory.refreshScriptButtons(projectForRefresh, false, false);
-                        // } else { ... }
+                        publisher.scriptsChanged(); // 通知工具窗口更新脚本列表
                     });
                 }
             }
         });
-
-        System.out.println("[" + project.getName() + "] DirectoryWatcher started. Watching: " + watchedDirectories);
+        LOG.info("[" + project.getName() + "] ProjectDirectoryWatcherService started watching: " + this.watchedPythonScriptDir);
     }
 
-    private void stopWatching() {
-        if (!running) return;
-        System.out.println("[" + project.getName() + "] Stopping directory watcher...");
-        running = false; // Set flag first
+    private synchronized void stopWatching() {
+        if (!isRunning) return;
+        LOG.info("[" + project.getName() + "] Stopping ProjectDirectoryWatcherService for script dir.");
+        isRunning = false;
         if (connection != null) {
             try {
                 connection.disconnect();
-                System.out.println("[" + project.getName() + "] MessageBus connection disconnected.");
             } catch (Exception e) {
-                System.err.println("[" + project.getName() + "] Error disconnecting MessageBus: " + e.getMessage());
+                LOG.error("[" + project.getName() + "] Error disconnecting MessageBus: " + e.getMessage(), e);
             } finally {
                 connection = null;
             }
         }
-        // Don't clear watchedDirectories here, they are managed by updateWatchedDirectories
-        System.out.println("[" + project.getName() + "] DirectoryWatcher stopped.");
+        // watchedPythonScriptDir 保留，updateWatchedDirectories 会更新它
+        LOG.info("[" + project.getName() + "] ProjectDirectoryWatcherService for script dir stopped.");
     }
-
 
     @Nullable
     private VirtualFile extractFileFromEvent(VFileEvent event) {
-        // Simplified extraction logic
-        if (event instanceof VFileContentChangeEvent) {
+        // 简化版，您可以根据需要扩展
+        if (event instanceof VFileContentChangeEvent ||
+                event instanceof VFileDeleteEvent ||
+                event instanceof VFileMoveEvent) {
             return event.getFile();
         } else if (event instanceof VFileCreateEvent) {
-            // For create, sometimes getFile() is null, try requestor or path
-            VirtualFile file = event.getFile();
-            if (file == null && event.getRequestor() instanceof VirtualFile) {
-                file = (VirtualFile) event.getRequestor(); // Might be parent
-            }
-            if (file == null && event.getPath() != null) {
-                file = LocalFileSystem.getInstance().findFileByPath(event.getPath());
-            }
-            return file; // Could still be null
-        } else if (event instanceof VFileDeleteEvent) {
-            return event.getFile(); // File might be invalid after delete, but path is useful
-        } else if (event instanceof VFileMoveEvent) {
-            return event.getFile(); // Represents the file *after* the move
+            return ((VFileCreateEvent) event).getFile(); // 注意：有时可能是 null
         } else if (event instanceof VFileCopyEvent) {
-            return ((VFileCopyEvent) event).getNewParent().findChild(((VFileCopyEvent) event).getNewChildName());
+            return ((VFileCopyEvent) event).findCreatedFile();
         } else if (event instanceof VFilePropertyChangeEvent) {
-            // Handle renames specifically
-            if (VirtualFile.PROP_NAME.equals(((VFilePropertyChangeEvent) event).getPropertyName())) {
-                return event.getFile();
-            }
+            return event.getFile();
         }
-        return null; // Default return null if not handled or file is not extractable
+        return null;
     }
 
-
-    public boolean isRunning() {
-        return running;
-    }
-    private boolean watchedDirChanged()
-    {
-        boolean changed = false;
-        for (ConcurrentHashMap.Entry<Path, Boolean> entry : watchedDirExists.entrySet()) {
-            Path path = entry.getKey();
-            Boolean exists = entry.getValue();
-            boolean actualExists = Files.exists(path); // 检查路径实际是否存在
-            if (actualExists != exists) {
-                changed = true;
-            }
-            watchedDirExists.put(path, actualExists);
-        }
-        return changed;
-    }
-    // Called when the project is closed
     @Override
     public void dispose() {
-        System.out.println("Disposing ProjectDirectoryWatcherService for project: " + project.getName());
+        LOG.info("Disposing ProjectDirectoryWatcherService for project: " + project.getName());
         stopWatching();
-        watchedDirectories.clear();
+        this.watchedPythonScriptDir = null;
     }
 }

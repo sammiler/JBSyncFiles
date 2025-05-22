@@ -1,0 +1,37 @@
+<idea-plugin>
+    <!--
+      这个文件用于定义当可选依赖 org.jetbrains.plugins.terminal 存在时，
+      你的插件可以加载的额外扩展或组件。
+      如果 Terminal 插件不存在或被禁用，这个文件中的内容会被忽略。
+    -->
+    <!-- 通常，可选依赖的配置文件本身并不直接包含 <depends>org.jetbrains.plugins.terminal</depends> -->
+    <!-- <depends> 标签通常在主 plugin.xml 中用于声明硬依赖或可选依赖的ID -->
+
+    <!-- 如果你需要基于 Terminal 插件的存在性来注册特定的 Action、Service 或 Extension Point， -->
+    <!-- 你会在这里声明它们。 -->
+
+    <!-- 示例：假设你有一个特殊的 Action 只有在 Terminal 插件可用时才显示 -->
+    <!--
+    <actions>
+        <action id="SyncFiles.RunWithAdvancedTerminalFeatures"
+                class="com.example.syncfiles.actions.TerminalSpecificAction"
+                text="Run with Advanced Terminal Features">
+            <add-to-group group-id="ToolsMenu" anchor="last"/>
+        </action>
+    </actions>
+    -->
+
+    <!-- 对于仅仅是“使用”Terminal API 的情况，如 SyncFilesToolWindowFactory 中那样，-->
+    <!-- 并不总是需要在此文件中添加内容。主要 plugin.xml 中的 <depends optional="true"> -->
+    <!-- 已经声明了这种可选的 API 使用关系。-->
+
+    <!-- 这个文件的主要用途是：如果 Terminal 插件存在，则加载【这里定义的】额外组件。 -->
+    <!-- 如果你的插件只是在代码中检查 Terminal API 是否可用，而不添加特定于此依赖的组件， -->
+    <!-- 则此文件可以保持非常简单，甚至为空（除了 <idea-plugin> 标签）。 -->
+
+    <!-- 目前，对于您的需求（在代码中使用 TerminalView API），-->
+    <!-- 保持此文件为空（仅含 <idea-plugin></idea-plugin> 标签）或仅包含注释是完全可以的。-->
+    <!-- 主 plugin.xml 中的 <depends optional="true" config-file="syncfiles-terminal.xml">org.jetbrains.plugins.terminal</depends> -->
+    <!-- 已经正确地建立了这种可选链接。-->
+
+</idea-plugin>

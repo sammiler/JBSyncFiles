@@ -8,6 +8,7 @@ import com.intellij.util.xmlb.annotations.MapAnnotation;
 import com.intellij.util.xmlb.annotations.OptionTag;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
+import java.util.Collections; // For Collections.emptyList()
 
 import java.util.*;
 import java.util.concurrent.ConcurrentHashMap; // Good choice
@@ -19,7 +20,6 @@ import java.util.concurrent.CopyOnWriteArrayList; // Alternative for list if nee
 )
 @Service(Service.Level.PROJECT) // Correctly defined as Project Level Service
 public final class SyncFilesConfig implements PersistentStateComponent<SyncFilesConfig.State> {
-
     // Static inner class for state is recommended
     public static class State {
         // Use @XCollection for better control over list serialization
@@ -34,6 +34,13 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
 
         @OptionTag("pythonExecutablePath")
         public String pythonExecutablePath = "";
+
+        // Inside SyncFilesConfig.State
+        @XCollection(style = XCollection.Style.v2, elementTypes = WatchEntry.class)
+        public List<WatchEntry> watchEntries = new ArrayList<>();
+
+        @XCollection(style = XCollection.Style.v2, elementTypes = ScriptGroup.class)
+        public List<ScriptGroup> scriptGroups = new ArrayList<>();
     }
 
     private State myState = new State(); // Holds the actual state
@@ -50,16 +57,22 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
 
     @Override
     public void loadState(@NotNull State state) {
-        XmlSerializerUtil.copyBean(state, myState); // Copy loaded state into current state object
-        // Ensure collections are of the expected type after copyBean, if necessary
-        if (!(myState.envVariables instanceof ConcurrentHashMap)) {
-            myState.envVariables = new ConcurrentHashMap<>(myState.envVariables);
-        }
-        // Consider CopyOnWriteArrayList if mappings could be modified by background threads,
-        // otherwise ArrayList synchronized externally (like below) is okay.
-        // if (!(myState.mappings instanceof CopyOnWriteArrayList)) {
-        //    myState.mappings = new CopyOnWriteArrayList<>(myState.mappings);
-        // }
+        XmlSerializerUtil.copyBean(state, myState);
+        // Ensure collections are not null and are the correct mutable type after deserialization
+        if (myState.mappings == null) myState.mappings = new ArrayList<>();
+        else myState.mappings = new ArrayList<>(myState.mappings);
+
+        if (myState.envVariables == null) myState.envVariables = new ConcurrentHashMap<>();
+        else myState.envVariables = new ConcurrentHashMap<>(myState.envVariables);
+
+        if (myState.watchEntries == null) myState.watchEntries = new ArrayList<>();
+        else myState.watchEntries = new ArrayList<>(myState.watchEntries);
+
+        if (myState.scriptGroups == null) myState.scriptGroups = new ArrayList<>();
+        else myState.scriptGroups = new ArrayList<>(myState.scriptGroups);
+
+        // Call getter to ensure "Default" group logic is applied after loading
+        getScriptGroups();
     }
 
     // --- Accessors with thread-safety considerations ---
@@ -126,4 +139,47 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
             this.myState.pythonExecutablePath = pythonExecutablePath != null ? pythonExecutablePath.trim() : "";
         }
     }
+
+
+// ... (existing class structure) ...
+
+    public List<WatchEntry> getWatchEntries() {
+        synchronized (myState) {
+            return myState.watchEntries == null ? new ArrayList<>() : new ArrayList<>(myState.watchEntries);
+        }
+    }
+
+    public void setWatchEntries(List<WatchEntry> watchEntries) {
+        synchronized (myState) {
+            myState.watchEntries = (watchEntries != null) ? new ArrayList<>(watchEntries) : new ArrayList<>();
+        }
+    }
+
+    public List<ScriptGroup> getScriptGroups() {
+        synchronized (myState) {
+            if (myState.scriptGroups == null) {
+                myState.scriptGroups = new ArrayList<>();
+            }
+            // Ensure "Default" group exists
+            if (myState.scriptGroups.stream().noneMatch(g -> ScriptGroup.DEFAULT_GROUP_ID.equals(g.id))) {
+                ScriptGroup defaultGroup = new ScriptGroup(ScriptGroup.DEFAULT_GROUP_ID, ScriptGroup.DEFAULT_GROUP_NAME);
+                myState.scriptGroups.add(0, defaultGroup); // Add to the beginning
+            }
+            return new ArrayList<>(myState.scriptGroups); // Return a copy
+        }
+    }
+
+    public void setScriptGroups(List<ScriptGroup> scriptGroups) {
+        synchronized (myState) {
+            myState.scriptGroups = (scriptGroups != null) ? new ArrayList<>(scriptGroups) : new ArrayList<>();
+            // Ensure "Default" group exists after setting
+            if (myState.scriptGroups.stream().noneMatch(g -> ScriptGroup.DEFAULT_GROUP_ID.equals(g.id))) {
+                ScriptGroup defaultGroup = new ScriptGroup(ScriptGroup.DEFAULT_GROUP_ID, ScriptGroup.DEFAULT_GROUP_NAME);
+                myState.scriptGroups.add(0, defaultGroup);
+            }
+        }
+    }
+
+
+// ... (no state sanitation method as requested in previous interaction)
 }

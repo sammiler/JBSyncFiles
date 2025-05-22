@@ -1,64 +1,115 @@
 <idea-plugin>
-    <id>syncfiles</id>
-    <name>SyncFiles</name>
-    <version>3.4.0</version>
+    <id>syncfiles</id> <!-- 您的插件ID -->
+    <name>SyncFiles</name> <!-- 您的插件名称 -->
+    <version>4.0.0</version> <!-- 新版本号 -->
     <vendor email="sammilergood@gmail.com" url="https://cplusplusbug.org">sammiler</vendor>
 
     <description><![CDATA[
-    <b>SyncFiles</b> is a lightweight plugin for IntelliJ IDEA (and compatible IDEs like CLion) designed to simplify syncing files and directories from GitHub repositories to your local project.<br/>
-    Whether pulling code snippets, templates, or entire folders, SyncFiles streamlines the process with a user-friendly interface and customizable settings.<br/>
+    <b>SyncFiles</b> is a lightweight plugin for IntelliJ IDEA (and compatible IDEs like CLion) designed to simplify syncing files and directories from GitHub repositories to your local project, and manage/execute local Python scripts.<br/>
     <br/>
     <b>Key Features:</b>
     <ul>
-        <li><b>GitHub File/Directory Sync</b>: Download individual files (raw.githubusercontent.com URLs) or entire directories (/tree/ links) from GitHub repositories.</li>
-        <li><b>Custom Mappings</b>: Configure source URLs and target paths to sync files to specific locations in your project.</li>
-        <li><b>Python Script Execution</b>: List and execute local Python (*.py) scripts from a specified directory within the tool window.</li>
-        <li><b>Environment Variables</b>: Configure custom environment variables for executed Python scripts.</li>
-        <li><b>Directory Monitoring</b>: Automatically monitors the configured Python script directory and refreshes the tool window button list upon changes.</li>
-        <li><b>Project Auto-Refresh</b>: Automatically refreshes the IDE's virtual file system after sync or script execution to ensure changes are immediately visible.</li>
-        <li><b>Tool Window Integration</b>: Initiate sync or script execution with a single click from the dedicated "SyncFiles" tool window (right sidebar).</li>
-        <li><b>Multi-Instance Isolation</b>: Correctly handles multiple IDE windows (for different projects or multiple windows for the same project), ensuring isolated configuration, monitoring, and UI updates.</li>
+        <li><b>GitHub File/Directory Sync</b>: Download individual files or entire directories from GitHub.</li>
+        <li><b>Custom Mappings</b>: Configure source URLs and target paths.</li>
+        <li><b>Python Script Management</b>:
+            <ul>
+                <li>Organize scripts into collapsible groups in a dedicated tool window.</li>
+                <li>Execute scripts by double-clicking or via context menu.</li>
+                <li>Choose execution mode: integrated terminal or direct API call (background task with output console).</li>
+                <li>Set script aliases and descriptions (visible on hover).</li>
+                <li>Context menu for opening script, moving between groups, renaming/deleting groups.</li>
+            </ul>
+        </li>
+        <li><b>File/Directory Watching</b>:
+            <ul>
+                <li>Configure paths to watch (files or directories).</li>
+                <li>Specify a Python script to run when a change (create, modify, delete) is detected.</li>
+                <li>Event type ("Change New", "Change Mod", "Change Del") and affected path passed as arguments to the script.</li>
+            </ul>
+        </li>
+        <li><b>Environment Variables</b>: Configure custom environment variables for all executed Python scripts.</li>
+        <li><b>Automatic Refresh</b>:
+            <ul>
+                <li>Tool window automatically updates when scripts in the configured Python directory change.</li>
+                <li>VFS refresh after sync or script execution.</li>
+            </ul>
+        </li>
+        <li><b>Project Auto-Refresh</b>: Automatically refreshes the IDE's virtual file system after sync or script execution.</li>
+        <li><b>Multi-Instance Isolation</b>: Isolated configuration, monitoring, and UI updates for different projects or multiple windows of the same project.</li>
     </ul>
     <br/>
     Configure the plugin via `File > Settings > Tools > SyncFiles Settings`.<br/>
-    Requires IntelliJ IDEA 2024.1 or later.
+    Requires IntelliJ IDEA 2024.1 or later (check your target `sinceBuild`).
     ]]></description>
 
-    <!-- 更新日志 (可以保留中文，但英文更佳) -->
     <change-notes><![CDATA[
+    <b>Version 3.5.0 (Conceptual - based on your request)</b>
+    <ul>
+        <li><b>Feature: File/Directory Watchers</b>: Added ability to monitor specified files or directories and execute a Python script on changes (create, modify, delete). Event type and affected path are passed to the script. Configurable in Settings.</li>
+        <li><b>Feature: Script Execution in Terminal</b>: Scripts can now be executed by opening the IDE's terminal and running the command. Environment variables are attempted to be set.</li>
+        <li><b>Feature: Script Grouping and Management</b>:
+            <ul>
+                <li>Scripts in the tool window are now organized into groups (Default group initially).</li>
+                <li>Added "Add Group" button and context menu actions to rename/delete groups.</li>
+                <li>Scripts can be moved between groups.</li>
+                <li>Context menu options to set script alias, description, and execution mode (Terminal/Direct API).</li>
+            </ul>
+        </li>
+        <li><b>Enhancement: Tool Window Overhaul</b>: Replaced simple script buttons with a tree view for groups and scripts. Hovering over a script shows its description and execution mode.</li>
+        <li><b>Enhancement: Settings UI</b>: Added a table for "File/Directory Watchers" configuration.</li>
+        <li><b>Refactor: Watcher Services</b>:
+            <ul>
+                <li><code>ProjectDirectoryWatcherService</code> now primarily monitors the <code>pythonScriptPath</code> for changes to the list of available scripts.</li>
+                <li>New <code>FileChangeEventWatcherService</code> handles the custom file/directory watching feature.</li>
+            </ul>
+        </li>
+        <li><b>Fix</b>: Ensured paths are handled with '/' as separator for cross-platform consistency in configuration and display.</li>
+        <li><b>Fix</b>: Double-click now triggers script execution based on configured mode.</li>
+        <li><b>Cleanup</b>: Configuration for empty <code>pythonScriptPath</code> now correctly clears script-dependent settings.</li>
+    </ul>
     <b>Version 3.4.0</b>
     <ul>
-    <li>Fix: Fixed the non-functional remove ('-') button for the File Mappings and Environment Variables tables in the settings UI, allowing rows to be deleted.</li>
+      <li>Fix: Fixed the non-functional remove ('-') button for the File Mappings and Environment Variables tables in the settings UI, allowing rows to be deleted.</li>
     </ul>
     <b>Version 3.3.0</b>
     <ul>
-      <li>Fix: Resolved UI update confusion when opening multiple windows for the same project (by operating on window-specific UI components).</li>
-      <li>Fix: Resolved configuration and directory monitoring conflicts when opening multiple IDE instances (different projects) using Project Scoping.</li>
-      <li>Fix: Corrected potential `ArrayIndexOutOfBoundsException` (fromIndex > toIndex) when comparing identical files during directory merge.</li>
-      <li>Improvement: Enhanced error handling and progress display during file/directory synchronization.</li>
-      <li>Improvement: Used `backgroundPostStartupActivity` for startup initialization on a background thread to avoid blocking the UI.</li>
+      <li>Fix: Resolved UI update confusion when opening multiple windows for the same project.</li>
+      <li>Fix: Resolved configuration and directory monitoring conflicts when opening multiple IDE instances.</li>
+      <li>Fix: Corrected potential `ArrayIndexOutOfBoundsException` during file comparison.</li>
+      <li>Improvement: Enhanced error handling and progress display during synchronization.</li>
+      <li>Improvement: Used `backgroundPostStartupActivity` for startup initialization.</li>
       <li>Improvement: Optimized settings UI experience and input validation.</li>
     </ul>
     ]]></change-notes>
 
-    <!-- 兼容性 -->
+    <!-- 兼容性: 根据你的 build.gradle.kts 中的 targetPlatform -->
     <idea-version since-build="241" until-build="251.*"/>
 
-    <!-- 核心平台依赖 -->
     <depends>com.intellij.modules.platform</depends>
+    <!-- 如果使用了 TerminalView API，可能需要明确依赖 Terminal 插件 -->
+    <depends optional="true" config-file="syncfiles-terminal.xml">org.jetbrains.plugins.terminal</depends>
 
-    <!-- 扩展点实现 -->
     <extensions defaultExtensionNs="com.intellij">
+        <!-- Project Level Services -->
+        <!-- SyncFilesConfig 现在通过 @Service 注解自动注册, 所以这里不再需要声明 -->
         <projectService serviceImplementation="com.example.syncfiles.ProjectDirectoryWatcherService"/>
+        <projectService serviceImplementation="com.example.syncfiles.FileChangeEventWatcherService"/>
+
+        <!-- Startup Activity -->
         <backgroundPostStartupActivity implementation="com.example.syncfiles.WatcherInitializerActivity"/>
+
+        <!-- Tool Window -->
         <toolWindow id="SyncFiles" secondary="true" anchor="right" icon="/icons/syncToolWindow.svg"
                     factoryClass="com.example.syncfiles.SyncFilesToolWindowFactory"/>
+
+        <!-- Settings Page -->
         <projectConfigurable id="com.example.syncfiles.SyncFilesSettings"
                              displayName="SyncFiles Settings"
-        instance="com.example.syncfiles.SyncFilesSettingsConfigurable"/>
+                             instance="com.example.syncfiles.SyncFilesSettingsConfigurable"
+                             groupId="tools"/>
     </extensions>
 
-    <!-- 可选：定义一个手动触发同步的 Action -->
+
     <actions>
         <action id="SyncFiles.ManualSync" class="com.example.syncfiles.SyncAction" text="Sync GitHub Files Now"
                 description="Manually triggers file synchronization from GitHub based on settings."
@@ -66,5 +117,4 @@
             <add-to-group group-id="ToolsMenu" anchor="last"/>
         </action>
     </actions>
-
 </idea-plugin>
