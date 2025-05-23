@@ -24,14 +24,12 @@ import java.nio.file.Files;
 import java.nio.file.InvalidPathException; // 引入 InvalidPathException
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.ArrayList;
-import java.util.HashMap; // 引入 HashMap
-import java.util.List;
-import java.util.Map;
-import java.util.Objects;
+import java.util.*;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
 import java.util.stream.Collectors;
+
+import static com.example.syncfiles.Util.normalizePath;
 
 public class FileChangeEventWatcherService implements Disposable {
     private static final Logger LOG = Logger.getInstance(FileChangeEventWatcherService.class);
@@ -39,6 +37,7 @@ public class FileChangeEventWatcherService implements Disposable {
     private MessageBusConnection connection;
     private boolean isRunning = false;
     private final List<ActiveWatch> activeWatchers = new ArrayList<>();
+    private final Set<String> watcherPath = new LinkedHashSet<>();
     private final ExecutorService scriptExecutorService = Executors.newCachedThreadPool();
 
     public FileChangeEventWatcherService(Project project) {
@@ -46,15 +45,33 @@ public class FileChangeEventWatcherService implements Disposable {
         LOG.info("FileChangeEventWatcherService created for project: " + project.getName());
     }
 
+
+    public synchronized void addWatcherPath(String path) {
+        if (normalizePath(project,path) != null)
+        {
+            watcherPath.add(normalizePath(project,path));
+        }
+        if (!watcherPath.isEmpty())
+        {
+            if (!isRunning)
+                startWatching();
+        }
+    }
+
+    public synchronized void removeWatcherPath(String path)
+    {
+        if (normalizePath(project,path) != null)
+        {
+            watcherPath.add(normalizePath(project,path));
+        }
+    }
     public synchronized void updateWatchersFromConfig() {
         String projectName = project.getName(); // 用于日志，避免重复调用 project.getName()
         LOG.info("[" + projectName + "] Updating watchers from config.");
-        stopWatching(); // 停止当前的监听
         activeWatchers.clear();
 
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
         String pythonExecutable = config.getPythonExecutablePath();
-        String pythonScriptBaseDir = config.getPythonScriptPath(); // 这是全局脚本目录
 
         // 检查 Python 执行文件路径
         if (StringUtil.isEmptyOrSpaces(pythonExecutable)) {
@@ -95,9 +112,9 @@ public class FileChangeEventWatcherService implements Disposable {
                 Path tempScriptPath = Paths.get(scriptToRunPathInput.replace('\\', '/'));
                 if (tempScriptPath.isAbsolute()) {
                     fullScriptPathToExecute = tempScriptPath.normalize();
-                } else if (!StringUtil.isEmptyOrSpaces(pythonScriptBaseDir)) {
+                } else if (!StringUtil.isEmptyOrSpaces(projectBasePath)) {
                     // 脚本路径是相对的，且全局脚本目录已配置
-                    fullScriptPathToExecute = Paths.get(pythonScriptBaseDir.replace('\\','/'), scriptToRunPathInput.replace('\\', '/')).normalize();
+                    fullScriptPathToExecute = Paths.get(projectBasePath.replace('\\','/'), scriptToRunPathInput.replace('\\', '/')).normalize();
                 } else {
                     LOG.warn("[" + projectName + "] Cannot resolve relative 'Python Script on Modify': '" + scriptToRunPathInput +
                             "' for 'Path to Watch': '" + watchedPathInput +
@@ -164,7 +181,7 @@ public class FileChangeEventWatcherService implements Disposable {
                     " -> executes '" + fullScriptPathToExecute.toString().replace('\\', '/') + "'");
         }
 
-        if (!activeWatchers.isEmpty()) {
+        if (!activeWatchers.isEmpty() || !isRunning) {
             startWatching();
         } else {
             LOG.info("[" + projectName + "] No active watchers were configured after processing entries.");
@@ -173,7 +190,7 @@ public class FileChangeEventWatcherService implements Disposable {
 
     private synchronized void startWatching() {
         String projectName = project.getName();
-        if (isRunning || activeWatchers.isEmpty()) {
+        if (isRunning || (activeWatchers.isEmpty() &&watcherPath.isEmpty())) {
             if (isRunning) LOG.info("[" + projectName + "] Watcher already running.");
             if (activeWatchers.isEmpty() && !isRunning) LOG.info("[" + projectName + "] No active watchers to start.");
             return;
@@ -280,6 +297,14 @@ public class FileChangeEventWatcherService implements Disposable {
                 LOG.info("[" + projectName + "] Matched watch: '" + watcher.watchedPath + "' -> executes '" + watcher.scriptToRun + "'");
                 executeWatchedScript(watcher.scriptToRun, finalEventType, finalAffectedPath);
             }
+        }
+        Set<String> exactMatches = watcherPath.stream()
+                .filter(pathInSet -> pathInSet.equals(finalAffectedPath))
+                .collect(Collectors.toSet());
+        if (!exactMatches.isEmpty())
+        {
+            if(Util.reloadSyncFilesConfigFromDisk(project))
+                project.getMessageBus().syncPublisher(SyncFilesNotifier.TOPIC).configurationChanged();
         }
     }
 

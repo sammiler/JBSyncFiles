@@ -10,7 +10,7 @@ public class WatchEntry {
     @Attribute("watchedPath")
     public String watchedPath = "";
 
-    @Attribute("onEventScript") // Relative to pythonScriptPath
+    @Attribute("onEventScript") // Relative to project Path
     public String onEventScript = "";
 
     public WatchEntry() {}

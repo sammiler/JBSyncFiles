@@ -178,27 +178,45 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         gbc.insets = JBUI.insets(5, 0);
 
         mainPanel.add(new JBLabel("File Mappings (GitHub URL to Local Path):"), gbc);
-        gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.insets = JBUI.insets(0, 0, 10, 0);
+        gbc.weightx = 1.0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = JBUI.insets(0, 0, 10, 0);
         mainPanel.add(mappingsPanel, gbc);
 
-        gbc.weightx = 0.0; gbc.fill = GridBagConstraints.NONE; gbc.insets = JBUI.insets(5, 0);
+        gbc.weightx = 0.0;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.insets = JBUI.insets(5, 0);
         mainPanel.add(new JBLabel("Environment Variables for Python Scripts:"), gbc);
-        gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.insets = JBUI.insets(0, 0, 10, 0);
+        gbc.weightx = 1.0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = JBUI.insets(0, 0, 10, 0);
         mainPanel.add(envVarsPanel, gbc);
 
-        gbc.weightx = 0.0; gbc.fill = GridBagConstraints.NONE; gbc.insets = JBUI.insets(5, 0);
+        gbc.weightx = 0.0;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.insets = JBUI.insets(5, 0);
         mainPanel.add(new JBLabel("Path to Watch Settings:"), gbc); // 新增 Watch Entries 标题
-        gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.insets = JBUI.insets(0, 0, 10, 0);
+        gbc.weightx = 1.0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = JBUI.insets(0, 0, 10, 0);
         mainPanel.add(watchEntriesPanel, gbc); // 新增 Watch Entries 面板
 
-        gbc.weightx = 0.0; gbc.fill = GridBagConstraints.NONE; gbc.insets = JBUI.insets(5, 0);
+        gbc.weightx = 0.0;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.insets = JBUI.insets(5, 0);
         mainPanel.add(new JBLabel("Python Scripts Directory:"), gbc);
-        gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.insets = JBUI.insets(0, 0, 5, 0);
+        gbc.weightx = 1.0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = JBUI.insets(0, 0, 5, 0);
         mainPanel.add(pythonScriptPathField, gbc);
 
-        gbc.weightx = 0.0; gbc.fill = GridBagConstraints.NONE; gbc.insets = JBUI.insets(5, 0);
+        gbc.weightx = 0.0;
+        gbc.fill = GridBagConstraints.NONE;
+        gbc.insets = JBUI.insets(5, 0);
         mainPanel.add(new JBLabel("Python Executable Path:"), gbc);
-        gbc.weightx = 1.0; gbc.fill = GridBagConstraints.HORIZONTAL; gbc.insets = JBUI.insets(0, 0, 10, 0);
+        gbc.weightx = 1.0;
+        gbc.fill = GridBagConstraints.HORIZONTAL;
+        gbc.insets = JBUI.insets(0, 0, 10, 0);
         mainPanel.add(pythonExecutablePathField, gbc);
 
         gbc.weighty = 1.0; // Filler
@@ -239,9 +257,12 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         LOG.info("[" + projectName + "][Settings] Attempting to apply settings...");
 
         // 确保在读取UI值之前，所有表格的编辑都已停止并提交到模型
-        if (mappingsTable.isEditing() && mappingsTable.getCellEditor() != null) mappingsTable.getCellEditor().stopCellEditing();
-        if (envVarsTable.isEditing() && envVarsTable.getCellEditor() != null) envVarsTable.getCellEditor().stopCellEditing();
-        if (watchEntriesTable.isEditing() && watchEntriesTable.getCellEditor() != null) watchEntriesTable.getCellEditor().stopCellEditing();
+        if (mappingsTable.isEditing() && mappingsTable.getCellEditor() != null)
+            mappingsTable.getCellEditor().stopCellEditing();
+        if (envVarsTable.isEditing() && envVarsTable.getCellEditor() != null)
+            envVarsTable.getCellEditor().stopCellEditing();
+        if (watchEntriesTable.isEditing() && watchEntriesTable.getCellEditor() != null)
+            watchEntriesTable.getCellEditor().stopCellEditing();
 
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
 
@@ -258,8 +279,12 @@ public class SyncFilesSettingsConfigurable implements Configurable {
             if (!mapping.sourceUrl.matches("^https?://.*")) { // 简单URL格式校验
                 throw new ConfigurationException("Mapping Entry #" + (i + 1) + ": Invalid 'Source URL' format. Must start with http:// or https://.");
             }
-            try { Paths.get(mapping.targetPath.replace('\\', '/')); } // 简单路径格式校验
-            catch (InvalidPathException e) { throw new ConfigurationException("Mapping Entry #" + (i + 1) + ": Invalid 'Target Path' format: " + e.getMessage());}
+            try {
+                Paths.get(mapping.targetPath.replace('\\', '/'));
+            } // 简单路径格式校验
+            catch (InvalidPathException e) {
+                throw new ConfigurationException("Mapping Entry #" + (i + 1) + ": Invalid 'Target Path' format: " + e.getMessage());
+            }
         }
         config.setMappings(mappingsFromUI);
         LOG.debug("[" + projectName + "][Settings] Mappings applied. Count: " + mappingsFromUI.size());
@@ -381,16 +406,20 @@ public class SyncFilesSettingsConfigurable implements Configurable {
                     throw new ConfigurationException("Watch Entry #" + (i + 1) + ": 'Python Script on Modify' ('" + entryOnEventScript +
                             "') must be an absolute path if 'Python Scripts Directory' is not set.");
                 }
-                try {
-                    // 这里可以尝试解析为绝对路径，但不强制检查文件是否存在，因为服务启动时会检查
-                    Paths.get(scriptPathText, entryOnEventScript);
-                } catch (InvalidPathException e) {
-                    throw new ConfigurationException("Watch Entry #" + (i + 1) + ": Invalid relative 'Python Script on Modify' path structure: '" + entryOnEventScript + "'. " + e.getMessage());
+
+                // 这里可以尝试解析为绝对路径，但不强制检查文件是否存在，因为服务启动时会检查
+                String projectPath = project.getBasePath();
+                if (projectPath != null) {
+                    Path realPath = Paths.get(projectPath, entryOnEventScript);
+                    if (!Files.exists(realPath)) {
+                        throw new ConfigurationException("Watch Entry #" + (i + 1) + ": Relative Path don't exist: '" + entryOnEventScript + "'. ");
+                    }
                 }
+
             } else { // 脚本是绝对路径，可以做个简单存在性检查（可选）
-                // if (!Files.isRegularFile(scriptForWatchPath)) {
-                // LOG.warn("Absolute script for watch entry does not exist (yet): " + scriptForWatchPath);
-                // }
+                if (!Files.isRegularFile(scriptForWatchPath)) {
+                    throw new ConfigurationException("Watch Entry #" + (i + 1) + ": Absolute Path don't exist: '" + scriptForWatchPath + "'. ");
+                }
             }
         }
         config.setWatchEntries(watchEntriesFromUI);
@@ -551,9 +580,12 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         public Object getValueAt(int rowIndex, int columnIndex) {
             WatchEntry entry = entries.get(rowIndex);
             switch (columnIndex) {
-                case 0: return entry.watchedPath;
-                case 1: return entry.onEventScript;
-                default: return null;
+                case 0:
+                    return entry.watchedPath;
+                case 1:
+                    return entry.onEventScript;
+                default:
+                    return null;
             }
         }
 

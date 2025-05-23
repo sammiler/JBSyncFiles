@@ -175,6 +175,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
 
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
         String pythonExecutable = config.getPythonExecutablePath();
+        pythonExecutable = Util.isDirectoryAfterMacroExpansion(project,pythonExecutable);
         if (StringUtil.isEmptyOrSpaces(pythonExecutable)) {
             Messages.showErrorDialog(project, "Python executable path is not configured in SyncFiles Settings.", "Execution Error");
             return;
@@ -654,7 +655,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
         rootNode.removeAllChildren();
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
         String pythonScriptPathStr = config.getPythonScriptPath();
-
+        pythonScriptPathStr = Util.isDirectoryAfterMacroExpansion(project,pythonScriptPathStr);
         List<ScriptGroup> configuredGroups = new ArrayList<>(config.getScriptGroups()); // 使用副本进行操作
 
         // 确保 Default 组存在

@@ -32,6 +32,7 @@ public class WatcherInitializerActivity implements ProjectActivity { // 或者 c
         FileChangeEventWatcherService fileChangeEventWatcher = project.getService(FileChangeEventWatcherService.class);
         if (fileChangeEventWatcher != null) {
             LOG.info("[" + projectName + "] Initializing FileChangeEventWatcherService...");
+            fileChangeEventWatcher.addWatcherPath(Util.configFilePath(project));
             fileChangeEventWatcher.updateWatchersFromConfig(); // ★★★ 在这里调用 ★★★
             LOG.info("[" + projectName + "] FileChangeEventWatcherService initialized.");
         } else {
@@ -42,38 +43,4 @@ public class WatcherInitializerActivity implements ProjectActivity { // 或者 c
         // 如果是旧的 StartupActivity (Java interface), 方法是 public void runActivity(@NotNull Project project)
     }
 
-    /*
-    // 如果您使用的是旧的 com.intellij.openapi.startup.StartupActivity 接口 (Java)
-    // 它会是这样的：
-    // import com.intellij.openapi.startup.StartupActivity;
-    public class WatcherInitializerActivity implements StartupActivity {
-        private static final Logger LOG = Logger.getInstance(WatcherInitializerActivity.class);
-
-        @Override
-        public void runActivity(@NotNull Project project) {
-            String projectName = project.getName();
-            LOG.info("WatcherInitializerActivity executing for project: " + projectName);
-
-            // 1. 初始化 ProjectDirectoryWatcherService
-            ProjectDirectoryWatcherService pyScriptDirWatcher = project.getService(ProjectDirectoryWatcherService.class);
-            if (pyScriptDirWatcher != null) {
-                LOG.info("[" + projectName + "] Initializing ProjectDirectoryWatcherService...");
-                pyScriptDirWatcher.updateWatchedDirectories();
-                LOG.info("[" + projectName + "] ProjectDirectoryWatcherService initialized.");
-            } else {
-                LOG.error("[" + projectName + "] Failed to get ProjectDirectoryWatcherService instance during project startup.");
-            }
-
-            // 2. 初始化 FileChangeEventWatcherService
-            FileChangeEventWatcherService fileChangeEventWatcher = project.getService(FileChangeEventWatcherService.class);
-            if (fileChangeEventWatcher != null) {
-                LOG.info("[" + projectName + "] Initializing FileChangeEventWatcherService...");
-                fileChangeEventWatcher.updateWatchersFromConfig();
-                LOG.info("[" + projectName + "] FileChangeEventWatcherService initialized.");
-            } else {
-                LOG.error("[" + projectName + "] Failed to get FileChangeEventWatcherService instance during project startup.");
-            }
-        }
-    }
-    */
 }

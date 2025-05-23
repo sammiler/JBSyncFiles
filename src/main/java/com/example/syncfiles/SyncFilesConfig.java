@@ -3,31 +3,31 @@ package com.example.syncfiles;
 import com.intellij.openapi.components.*;
 import com.intellij.openapi.project.Project;
 import com.intellij.util.xmlb.XmlSerializerUtil;
-import com.intellij.util.xmlb.annotations.XCollection; // More explicit collection annotation
+import com.intellij.util.xmlb.annotations.XCollection;
 import com.intellij.util.xmlb.annotations.MapAnnotation;
 import com.intellij.util.xmlb.annotations.OptionTag;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import java.util.Collections; // For Collections.emptyList()
 
+import java.util.Collections;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap; // Good choice
-import java.util.concurrent.CopyOnWriteArrayList; // Alternative for list if needed
+import java.util.concurrent.ConcurrentHashMap;
+// import java.util.stream.Collectors; // Potentially for deep list comparison if elements don't have equals
 
 @State(
         name = "SyncFilesConfig",
-        storages = {@Storage("syncFilesConfig.xml")} // Stored per project
+        storages = {@Storage("syncFilesConfig.xml")}
 )
-@Service(Service.Level.PROJECT) // Correctly defined as Project Level Service
+@Service(Service.Level.PROJECT)
 public final class SyncFilesConfig implements PersistentStateComponent<SyncFilesConfig.State> {
-    // Static inner class for state is recommended
+
+    // Static inner class for state
     public static class State {
-        // Use @XCollection for better control over list serialization
         @XCollection(style = XCollection.Style.v2)
-        public List<Mapping> mappings = new ArrayList<>(); // ArrayList is fine if only modified on EDT (Settings)
+        public List<Mapping> mappings = new ArrayList<>();
 
         @MapAnnotation(surroundWithTag = true, keyAttributeName = "name", valueAttributeName = "value")
-        public Map<String, String> envVariables = new ConcurrentHashMap<>(); // ConcurrentHashMap is good
+        public Map<String, String> envVariables = new ConcurrentHashMap<>(); // Or HashMap if only accessed via synchronized methods
 
         @OptionTag("pythonScriptPath")
         public String pythonScriptPath = "";
@@ -35,87 +35,109 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
         @OptionTag("pythonExecutablePath")
         public String pythonExecutablePath = "";
 
-        // Inside SyncFilesConfig.State
         @XCollection(style = XCollection.Style.v2, elementTypes = WatchEntry.class)
         public List<WatchEntry> watchEntries = new ArrayList<>();
 
         @XCollection(style = XCollection.Style.v2, elementTypes = ScriptGroup.class)
         public List<ScriptGroup> scriptGroups = new ArrayList<>();
+
+        // --- equals and hashCode ---
+        // IMPORTANT: This assumes that Mapping, WatchEntry, and ScriptGroup
+        // (and ScriptEntry if ScriptGroup.equals depends on it)
+        // have correctly implemented their own equals() and hashCode() methods
+        // based on ALL relevant persistent fields.
+
+        @Override
+        public boolean equals(Object o) {
+            if (this == o) return true;
+            if (o == null || getClass() != o.getClass()) return false;
+            State state = (State) o;
+
+            // Compare all fields. For collections, their .equals() method will be used,
+            // which in turn relies on the .equals() method of their elements.
+            return Objects.equals(mappings, state.mappings) &&
+                    Objects.equals(envVariables, state.envVariables) && // Map.equals compares entries
+                    Objects.equals(pythonScriptPath, state.pythonScriptPath) &&
+                    Objects.equals(pythonExecutablePath, state.pythonExecutablePath) &&
+                    Objects.equals(watchEntries, state.watchEntries) &&
+                    Objects.equals(scriptGroups, state.scriptGroups);
+        }
+
+        @Override
+        public int hashCode() {
+            return Objects.hash(mappings, envVariables, pythonScriptPath, pythonExecutablePath, watchEntries, scriptGroups);
+        }
     }
 
-    private State myState = new State(); // Holds the actual state
+    private State myState = new State();
 
     public static SyncFilesConfig getInstance(@NotNull Project project) {
-        return project.getService(SyncFilesConfig.class);
+        SyncFilesConfig service = project.getService(SyncFilesConfig.class);
+        if (service == null) {
+            // This should not happen if plugin.xml is correct and service is registered
+            throw new IllegalStateException("SyncFilesConfig service not found. Check plugin.xml registration.");
+        }
+        return service;
     }
 
     @Nullable
     @Override
     public State getState() {
-        return myState; // Return the state object for serialization
+        return myState;
     }
 
     @Override
     public void loadState(@NotNull State state) {
         XmlSerializerUtil.copyBean(state, myState);
-        // Ensure collections are not null and are the correct mutable type after deserialization
-        if (myState.mappings == null) myState.mappings = new ArrayList<>();
-        else myState.mappings = new ArrayList<>(myState.mappings);
 
-        if (myState.envVariables == null) myState.envVariables = new ConcurrentHashMap<>();
-        else myState.envVariables = new ConcurrentHashMap<>(myState.envVariables);
+        // Defensive copying to ensure mutable collections and non-null state
+        // XmlSerializerUtil.copyBean should handle this well, but being explicit can be safer
+        // depending on the exact nature of how copyBean works with specific collection types.
+        myState.mappings = new ArrayList<>(myState.mappings != null ? myState.mappings : Collections.emptyList());
+        myState.envVariables = new ConcurrentHashMap<>(myState.envVariables != null ? myState.envVariables : Collections.emptyMap());
+        myState.watchEntries = new ArrayList<>(myState.watchEntries != null ? myState.watchEntries : Collections.emptyList());
+        myState.scriptGroups = new ArrayList<>(myState.scriptGroups != null ? myState.scriptGroups : Collections.emptyList());
 
-        if (myState.watchEntries == null) myState.watchEntries = new ArrayList<>();
-        else myState.watchEntries = new ArrayList<>(myState.watchEntries);
 
-        if (myState.scriptGroups == null) myState.scriptGroups = new ArrayList<>();
-        else myState.scriptGroups = new ArrayList<>(myState.scriptGroups);
-
-        // Call getter to ensure "Default" group logic is applied after loading
-        getScriptGroups();
+        // Ensure "Default" group logic is applied after loading.
+        // Accessing through the getter will enforce this.
+        // Make sure getScriptGroups() itself does not create excessive copies if called frequently internally.
+        // For loadState, it's fine.
+        List<ScriptGroup> loadedGroups = getScriptGroups(); // This will initialize default if needed and return a copy
+        // If getScriptGroups modifies myState.scriptGroups directly (which it does for adding default),
+        // then just calling it is enough. No need to re-assign.
     }
 
-    // --- Accessors with thread-safety considerations ---
+    // --- Accessors with thread-safety considerations and defensive copies ---
 
-    // Return immutable copy or use thread-safe list internally if needed
     public List<Mapping> getMappings() {
         synchronized (myState) {
-            // Return a copy to prevent external modification of internal state
-            return new ArrayList<>(myState.mappings);
+            return new ArrayList<>(myState.mappings); // Return a copy
         }
     }
 
     public void setMappings(List<Mapping> mappings) {
         synchronized (myState) {
-            // Store a copy
             this.myState.mappings = new ArrayList<>(mappings != null ? mappings : Collections.emptyList());
         }
     }
 
-    // ConcurrentHashMap is mostly thread-safe for reads/writes, returning a copy is safest for callers
     public Map<String, String> getEnvVariables() {
-        // No sync needed for read if using ConcurrentHashMap, but return copy
-        return new HashMap<>(myState.envVariables);
-        // Or return ConcurrentHashMap copy if caller needs thread-safety too
-        // return new ConcurrentHashMap<>(myState.envVariables);
+        synchronized (myState) { // Even for ConcurrentHashMap, if you want a consistent snapshot
+            return new HashMap<>(myState.envVariables); // Return a copy
+        }
     }
 
     public void setEnvVariables(Map<String, String> envVariables) {
-        // No sync needed for replacing/clearing ConcurrentHashMap itself
-        if (envVariables != null) {
-            // Replace internal map safely
-            this.myState.envVariables = new ConcurrentHashMap<>(envVariables);
-        } else {
-            this.myState.envVariables = new ConcurrentHashMap<>();
+        synchronized (myState) {
+            if (envVariables != null) {
+                this.myState.envVariables = new ConcurrentHashMap<>(envVariables);
+            } else {
+                this.myState.envVariables = new ConcurrentHashMap<>();
+            }
         }
-        // Or use clear() + putAll() if preferred
-        // myState.envVariables.clear();
-        // if (envVariables != null) {
-        //     myState.envVariables.putAll(envVariables);
-        // }
     }
 
-    // Primitives/Strings: Synchronization is good practice for visibility across threads
     public String getPythonScriptPath() {
         synchronized (myState) {
             return myState.pythonScriptPath;
@@ -140,12 +162,9 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
         }
     }
 
-
-// ... (existing class structure) ...
-
     public List<WatchEntry> getWatchEntries() {
         synchronized (myState) {
-            return myState.watchEntries == null ? new ArrayList<>() : new ArrayList<>(myState.watchEntries);
+            return new ArrayList<>(myState.watchEntries);
         }
     }
 
@@ -155,31 +174,36 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
         }
     }
 
+    /**
+     * Gets the script groups. Ensures the "Default" group exists.
+     * Returns a defensive copy.
+     */
     public List<ScriptGroup> getScriptGroups() {
         synchronized (myState) {
-            if (myState.scriptGroups == null) {
+            if (myState.scriptGroups == null) { // Should be initialized by constructor or loadState
                 myState.scriptGroups = new ArrayList<>();
             }
-            // Ensure "Default" group exists
+            // Ensure "Default" group exists in the internal list
             if (myState.scriptGroups.stream().noneMatch(g -> ScriptGroup.DEFAULT_GROUP_ID.equals(g.id))) {
                 ScriptGroup defaultGroup = new ScriptGroup(ScriptGroup.DEFAULT_GROUP_ID, ScriptGroup.DEFAULT_GROUP_NAME);
-                myState.scriptGroups.add(0, defaultGroup); // Add to the beginning
+                // Add to the beginning of the internal list
+                myState.scriptGroups.add(0, defaultGroup);
             }
             return new ArrayList<>(myState.scriptGroups); // Return a copy
         }
     }
 
+    /**
+     * Sets the script groups. Ensures the "Default" group exists after setting.
+     */
     public void setScriptGroups(List<ScriptGroup> scriptGroups) {
         synchronized (myState) {
             myState.scriptGroups = (scriptGroups != null) ? new ArrayList<>(scriptGroups) : new ArrayList<>();
-            // Ensure "Default" group exists after setting
+            // Ensure "Default" group exists in the internal list after external list is set
             if (myState.scriptGroups.stream().noneMatch(g -> ScriptGroup.DEFAULT_GROUP_ID.equals(g.id))) {
                 ScriptGroup defaultGroup = new ScriptGroup(ScriptGroup.DEFAULT_GROUP_ID, ScriptGroup.DEFAULT_GROUP_NAME);
                 myState.scriptGroups.add(0, defaultGroup);
             }
         }
     }
-
-
-// ... (no state sanitation method as requested in previous interaction)
 }
