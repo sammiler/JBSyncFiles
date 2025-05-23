@@ -1,17 +1,5 @@
 package com.example.syncfiles;
 
-import com.intellij.execution.ExecutionException;
-import com.intellij.execution.Executor;
-import com.intellij.execution.configurations.GeneralCommandLine;
-import com.intellij.execution.executors.DefaultRunExecutor;
-import com.intellij.execution.process.OSProcessHandler;
-import com.intellij.execution.process.ProcessHandler;
-import com.intellij.execution.process.ProcessHandlerFactory;
-import com.intellij.execution.process.ProcessTerminatedListener;
-import com.intellij.execution.ui.ConsoleView;
-import com.intellij.execution.ui.ConsoleViewContentType;
-import com.intellij.execution.ui.RunContentDescriptor;
-import com.intellij.execution.ui.RunContentManager;
 import com.intellij.icons.AllIcons;
 import com.intellij.openapi.actionSystem.*;
 import com.intellij.openapi.application.ApplicationManager;
@@ -27,13 +15,10 @@ import com.intellij.openapi.project.DumbAware;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.ComboBox;
 import com.intellij.openapi.ui.DialogWrapper;
-import com.intellij.openapi.ui.InputValidator;
 import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.SystemInfo;
-import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.vfs.LocalFileSystem;
-import com.intellij.openapi.vfs.VfsUtil;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowManager;
@@ -56,7 +41,7 @@ import com.intellij.util.ui.tree.TreeUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.plugins.terminal.ShellTerminalWidget;
-import org.jetbrains.plugins.terminal.TerminalView; // 核心 Terminal API
+// 核心 Terminal API
 
 import javax.swing.*;
 import javax.swing.tree.*;
@@ -112,7 +97,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
             }
         });
         actionGroup.add(new Separator());
-        actionGroup.add(new AnAction("Sync GitHub Files", "Download files/directories based on mappings", AllIcons.Actions.CheckOut) {
+        actionGroup.add(new AnAction("Sync GitHub Files", "Download files/directories based on mappings", AllIcons.Actions.Download) {
             @Override
             public void actionPerformed(@NotNull AnActionEvent e) {
                 new SyncAction().syncFiles(project); // SyncAction 是您原有的类
@@ -390,7 +375,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
 
         // --- 针对 ScriptGroup ---
         // ... 在 createContextMenuActionGroup() 方法内 ...
-        group.add(new AnAction("Add Script to this Group...") {
+        group.add(new AnAction("Add Script to This Group...") {
             @Override
             public void actionPerformed(@NotNull AnActionEvent e) {
                 getSelectedScriptGroup().ifPresent(selectedGroup -> {
@@ -801,47 +786,96 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
             return;
         }
 
-        // 准备命令 (这部分逻辑保持，但可能需要调整环境变量设置方式)
+        // --- 命令构建开始 (核心修改区域) ---
         String commandToExecute;
-        // ... (构建 commandToExecute 的逻辑，如之前讨论的 PowerShell 和 Bash/Zsh 方式) ...
-        // [之前的 commandToExecute 构建逻辑]
         String normPythonExec = pythonExecutable.replace('\\', '/');
         String normScriptPath = scriptPath.replace('\\', '/');
-        boolean isLikelyPowerShell = SystemInfo.isWindows;
 
-        if (isLikelyPowerShell) {
-            StringBuilder psCommand = new StringBuilder();
+        // 获取用户配置的 shell 路径，并转为小写以便于判断
+        String actualShellPath = TerminalProjectOptionsProvider.getInstance(project).getShellPath().toLowerCase();
+        LOG.info("Detected actual shell path from settings: " + actualShellPath);
+
+        StringBuilder commandBuilder = new StringBuilder();
+
+        // 根据 actualShellPath 判断终端类型并构建命令
+        if (actualShellPath.contains("powershell.exe") || actualShellPath.contains("pwsh.exe")) {
+            // PowerShell (powershell.exe 或 pwsh.exe)
+            LOG.info("Shell type identified as PowerShell based on actualShellPath.");
             for (Map.Entry<String, String> entry : envVars.entrySet()) {
-                String escapedValue = entry.getValue().replace("'", "''");
-                psCommand.append("$env:").append(entry.getKey()).append(" = '").append(escapedValue).append("'; ");
+                String escapedValue = entry.getValue().replace("'", "''"); // PowerShell: ' -> ''
+                commandBuilder.append("$env:").append(entry.getKey()).append(" = '").append(escapedValue).append("'; ");
             }
-            psCommand.append("& '").append(normPythonExec).append("' '").append(normScriptPath).append("'");
-            commandToExecute = psCommand.toString();
+            commandBuilder.append("& '").append(normPythonExec).append("' '").append(normScriptPath).append("'");
+
+        } else if (actualShellPath.contains("cmd.exe")) {
+            // Windows Command Prompt (cmd.exe)
+            LOG.info("Shell type identified as CMD.EXE based on actualShellPath.");
+            boolean firstVar = true;
+            for (Map.Entry<String, String> entry : envVars.entrySet()) {
+                if (!firstVar) {
+                    commandBuilder.append(" && ");
+                }
+                // 对于 cmd.exe, set VAR=VALUE. 如果 VALUE 包含空格或特殊字符,
+                // 调用者应确保 entry.getValue() 本身是正确引用的，例如 "my value"
+                commandBuilder.append("set ").append(entry.getKey()).append("=").append(entry.getValue());
+                firstVar = false;
+            }
+            if (!envVars.isEmpty()) {
+                commandBuilder.append(" && ");
+            }
+            commandBuilder.append("\"").append(normPythonExec).append("\" \"").append(normScriptPath).append("\"");
+
+        } else if (actualShellPath.contains("bash") || actualShellPath.contains("zsh") || actualShellPath.contains("sh")) {
+            // Bash (e.g., git-bash.exe, /bin/bash), Zsh (/bin/zsh), Sh (/bin/sh)
+            // This will also catch paths like "C:\Program Files\Git\bin\bash.exe"
+            LOG.info("Shell type identified as Bash/Zsh/Sh (or Git Bash) based on actualShellPath.");
+            for (Map.Entry<String, String> entry : envVars.entrySet()) {
+                String escapedValue = entry.getValue().replace("'", "'\\''"); // Bash: ' -> '\''
+                commandBuilder.append("export ").append(entry.getKey()).append("='").append(escapedValue).append("'; ");
+            }
+            commandBuilder.append("\"").append(normPythonExec).append("\" \"").append(normScriptPath).append("\"");
         } else {
-            StringBuilder bashCommand = new StringBuilder();
-            for (Map.Entry<String, String> entry : envVars.entrySet()) {
-                String escapedValue = entry.getValue().replace("'", "'\\''");
-                bashCommand.append("export ").append(entry.getKey()).append("='").append(escapedValue).append("'; ");
+            // 原有的 SystemInfo.isWindows 判断作为最后的备用逻辑, 或者一个更通用的尝试
+            // 如果 shellPath 未知，但系统是 Windows，则倾向于 PowerShell
+            // 否则，倾向于 Bash。这是一个备选策略。
+            LOG.warn("Unrecognized shell path: '" + actualShellPath + "'. Falling back to OS-based detection or a default.");
+            boolean isLikelyPowerShellFallback = SystemInfo.isWindows; // 使用您代码中已有的变量
+
+            if (isLikelyPowerShellFallback) { // 沿用您代码中的 isLikelyPowerShell 变量名
+                LOG.info("Fallback: Assuming PowerShell due to Windows OS.");
+                for (Map.Entry<String, String> entry : envVars.entrySet()) {
+                    String escapedValue = entry.getValue().replace("'", "''");
+                    commandBuilder.append("$env:").append(entry.getKey()).append(" = '").append(escapedValue).append("'; ");
+                }
+                commandBuilder.append("& '").append(normPythonExec).append("' '").append(normScriptPath).append("'");
+            } else {
+                LOG.info("Fallback: Assuming Bash/Sh like shell.");
+                for (Map.Entry<String, String> entry : envVars.entrySet()) {
+                    String escapedValue = entry.getValue().replace("'", "'\\''");
+                    commandBuilder.append("export ").append(entry.getKey()).append("='").append(escapedValue).append("'; ");
+                }
+                commandBuilder.append("\"").append(normPythonExec).append("\" \"").append(normScriptPath).append("\"");
             }
-            bashCommand.append("\"").append(normPythonExec).append("\" \"").append(normScriptPath).append("\"");
-            commandToExecute = bashCommand.toString();
         }
+        commandToExecute = commandBuilder.toString();
         // --- 命令构建结束 ---
+
+        LOG.info("Final command to execute in terminal: " + commandToExecute); // 添加日志
 
         // 显示 Terminal ToolWindow 并尝试执行命令
         final String finalCommandToExecute = commandToExecute; // for lambda
         ApplicationManager.getApplication().invokeLater(() -> {
             terminalToolWindow.show(() -> { // 回调会在 ToolWindow 显示后执行
-                // 尝试从现有的 Content 中获取 ShellTerminalWidget，或者创建一个新的
-                // 这是最可能需要根据新 API 调整的部分
-                ShellTerminalWidget widgetToUse = findOrCreateTerminalWidget(project, terminalToolWindow, "SyncFiles Script");
+                ShellTerminalWidget widgetToUse = findOrCreateTerminalWidget(project, terminalToolWindow, "SyncFiles Script"); // 保持您原有的调用
 
                 if (widgetToUse != null) {
                     try {
-                        var shellPath = TerminalProjectOptionsProvider.getInstance(project).getShellPath();
                         LOG.info("Sending command to terminal widget: " + finalCommandToExecute);
                         widgetToUse.executeCommand(finalCommandToExecute);
-                    } catch (Exception e) {
+                    } catch (IOException e) { // ShellTerminalWidget.executeCommand() throws IOException
+                        LOG.error("IOException sending command to terminal widget: " + finalCommandToExecute, e);
+                        Messages.showErrorDialog(project, "Error sending command to terminal (IO): " + e.getMessage() + "\nCommand: " + finalCommandToExecute, "Terminal Error");
+                    } catch (Exception e) { // 其他运行时异常
                         LOG.error("Error sending command to terminal widget: " + finalCommandToExecute, e);
                         Messages.showErrorDialog(project, "Error sending command to terminal: " + e.getMessage() + "\nCommand: " + finalCommandToExecute, "Terminal Error");
                     }
