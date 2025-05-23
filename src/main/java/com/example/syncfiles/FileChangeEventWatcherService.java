@@ -47,24 +47,21 @@ public class FileChangeEventWatcherService implements Disposable {
 
 
     public synchronized void addWatcherPath(String path) {
-        if (normalizePath(project,path) != null)
-        {
-            watcherPath.add(normalizePath(project,path));
+        if (normalizePath(project, path) != null) {
+            watcherPath.add(normalizePath(project, path));
         }
-        if (!watcherPath.isEmpty())
-        {
+        if (!watcherPath.isEmpty()) {
             if (!isRunning)
                 startWatching();
         }
     }
 
-    public synchronized void removeWatcherPath(String path)
-    {
-        if (normalizePath(project,path) != null)
-        {
-            watcherPath.add(normalizePath(project,path));
+    public synchronized void removeWatcherPath(String path) {
+        if (normalizePath(project, path) != null) {
+            watcherPath.add(normalizePath(project, path));
         }
     }
+
     public synchronized void updateWatchersFromConfig() {
         String projectName = project.getName(); // 用于日志，避免重复调用 project.getName()
         LOG.info("[" + projectName + "] Updating watchers from config.");
@@ -114,7 +111,7 @@ public class FileChangeEventWatcherService implements Disposable {
                     fullScriptPathToExecute = tempScriptPath.normalize();
                 } else if (!StringUtil.isEmptyOrSpaces(projectBasePath)) {
                     // 脚本路径是相对的，且全局脚本目录已配置
-                    fullScriptPathToExecute = Paths.get(projectBasePath.replace('\\','/'), scriptToRunPathInput.replace('\\', '/')).normalize();
+                    fullScriptPathToExecute = Paths.get(projectBasePath.replace('\\', '/'), scriptToRunPathInput.replace('\\', '/')).normalize();
                 } else {
                     LOG.warn("[" + projectName + "] Cannot resolve relative 'Python Script on Modify': '" + scriptToRunPathInput +
                             "' for 'Path to Watch': '" + watchedPathInput +
@@ -143,7 +140,7 @@ public class FileChangeEventWatcherService implements Disposable {
                     absoluteWatchedPathObject = tempWatchedPath.normalize();
                 } else {
                     if (!StringUtil.isEmptyOrSpaces(projectBasePath)) {
-                        absoluteWatchedPathObject = Paths.get(projectBasePath.replace('\\','/'), watchedPathInput.replace('\\', '/')).normalize();
+                        absoluteWatchedPathObject = Paths.get(projectBasePath.replace('\\', '/'), watchedPathInput.replace('\\', '/')).normalize();
                     } else {
                         LOG.warn("[" + projectName + "] Cannot resolve relative 'Path to Watch': '" + watchedPathInput +
                                 "' because project base path is unavailable. Skipping this watch entry.");
@@ -190,7 +187,7 @@ public class FileChangeEventWatcherService implements Disposable {
 
     private synchronized void startWatching() {
         String projectName = project.getName();
-        if (isRunning || (activeWatchers.isEmpty() &&watcherPath.isEmpty())) {
+        if (isRunning || (activeWatchers.isEmpty() && watcherPath.isEmpty())) {
             if (isRunning) LOG.info("[" + projectName + "] Watcher already running.");
             if (activeWatchers.isEmpty() && !isRunning) LOG.info("[" + projectName + "] No active watchers to start.");
             return;
@@ -289,6 +286,10 @@ public class FileChangeEventWatcherService implements Disposable {
                 .collect(Collectors.toList());
 
         if (!matchedWatchers.isEmpty()) {
+            for (ActiveWatch watch : matchedWatchers)
+            {
+                Util.forceRefreshVFS(watch.watchedPath);
+            }
             LOG.info("[" + projectName + "] Relevant VFS Event: " + event.getClass().getSimpleName() +
                     " | Type: " + finalEventType + " | Path: " + finalAffectedPath +
                     " | Matched " + matchedWatchers.size() + " watchers.");
@@ -301,10 +302,13 @@ public class FileChangeEventWatcherService implements Disposable {
         Set<String> exactMatches = watcherPath.stream()
                 .filter(pathInSet -> pathInSet.equals(finalAffectedPath))
                 .collect(Collectors.toSet());
-        if (!exactMatches.isEmpty())
-        {
-            if(Util.reloadSyncFilesConfigFromDisk(project))
-                project.getMessageBus().syncPublisher(SyncFilesNotifier.TOPIC).configurationChanged();
+        if (!exactMatches.isEmpty()) {
+            for (String match : exactMatches) {
+                Util.forceRefreshVFS(match);
+            }
+
+            Util.reloadSyncFilesConfigFromDisk(project);
+            project.getMessageBus().syncPublisher(SyncFilesNotifier.TOPIC).configurationChanged();
         }
     }
 
@@ -313,14 +317,18 @@ public class FileChangeEventWatcherService implements Disposable {
         String projectName = project.getName();
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
         String pythonExecutable = config.getPythonExecutablePath(); // 已在 updateWatchersFromConfig 验证过
+        pythonExecutable = Util.isDirectoryAfterMacroExpansion(project,pythonExecutable);
 
+        String finalPythonExecutable = pythonExecutable;
+        scriptPathToExecute = Util.isDirectoryAfterMacroExpansion(project,scriptPathToExecute);
+        String finalScriptPathToExecute = scriptPathToExecute;
         scriptExecutorService.submit(() -> {
-            LOG.info("[" + projectName + "] Executing script for file event: '" + scriptPathToExecute +
+            LOG.info("[" + projectName + "] Executing script for file event: '" + finalScriptPathToExecute +
                     "' with args: [" + eventType + ", " + affectedFilePath + "]");
             try {
                 ProcessBuilder pb = new ProcessBuilder(
-                        pythonExecutable,
-                        scriptPathToExecute,
+                        finalPythonExecutable,
+                        finalScriptPathToExecute,
                         eventType,
                         affectedFilePath // affectedFilePath 已经是 / 分隔的绝对规范路径
                 );
@@ -329,7 +337,7 @@ public class FileChangeEventWatcherService implements Disposable {
                 envVars.putAll(config.getEnvVariables());
                 envVars.put("PYTHONIOENCODING", "UTF-8");
                 if (project.getBasePath() != null) {
-                    envVars.put("PROJECT_DIR", project.getBasePath().replace('\\','/'));
+                    envVars.put("PROJECT_DIR", project.getBasePath().replace('\\', '/'));
                 }
                 pb.environment().clear();
                 pb.environment().putAll(envVars);
@@ -338,7 +346,7 @@ public class FileChangeEventWatcherService implements Disposable {
                     pb.directory(new File(project.getBasePath()));
                 } else {
                     // Fallback CWD if project base path is null
-                    Path scriptFile = Paths.get(scriptPathToExecute);
+                    Path scriptFile = Paths.get(finalScriptPathToExecute);
                     if (scriptFile.getParent() != null) {
                         pb.directory(scriptFile.getParent().toFile());
                     }
@@ -352,11 +360,12 @@ public class FileChangeEventWatcherService implements Disposable {
                      BufferedReader errReader = new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
                     String line;
                     while ((line = outReader.readLine()) != null) output.append(line).append(System.lineSeparator());
-                    while ((line = errReader.readLine()) != null) errorOutput.append(line).append(System.lineSeparator());
+                    while ((line = errReader.readLine()) != null)
+                        errorOutput.append(line).append(System.lineSeparator());
                 }
                 int exitCode = process.waitFor();
 
-                String scriptFileName = Paths.get(scriptPathToExecute).getFileName().toString();
+                String scriptFileName = Paths.get(finalScriptPathToExecute).getFileName().toString();
                 if (exitCode == 0) {
                     LOG.info("[" + projectName + "] Script '" + scriptFileName + "' executed successfully for event '" + eventType + "' on '" + affectedFilePath + "'" +
                             (output.length() > 0 ? ". Output:\n" + output.toString().trim() : ""));
@@ -366,7 +375,7 @@ public class FileChangeEventWatcherService implements Disposable {
                             (output.length() > 0 ? ". Output:\n" + output.toString().trim() : "") +
                             (errorOutput.length() > 0 ? ". Error:\n" + errorOutput.toString().trim() : ""));
                 }
-                Util.refreshAllFiles(project);
+//                Util.refreshAllFiles(project);
                 ApplicationManager.getApplication().invokeLater(() -> {
                     // Refresh the VFS for the affected path
                     // Util.refreshPath(affectedFilePath); // 假设有一个 Util 方法
@@ -383,7 +392,7 @@ public class FileChangeEventWatcherService implements Disposable {
                 });
 
             } catch (IOException | InterruptedException e) {
-                LOG.error("[" + projectName + "] Error executing watched script '" + scriptPathToExecute + "': " + e.getMessage(), e);
+                LOG.error("[" + projectName + "] Error executing watched script '" + finalScriptPathToExecute + "': " + e.getMessage(), e);
             }
         });
     }

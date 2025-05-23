@@ -185,9 +185,8 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
             return;
         }
 
-        Path scriptBasePath = Paths.get(config.getPythonScriptPath());
+        Path scriptBasePath = Paths.get(Util.isDirectoryAfterMacroExpansion(project,config.getPythonScriptPath()));
         Path fullScriptPath = scriptBasePath.resolve(scriptEntry.path).normalize();
-
         if (!Files.isRegularFile(fullScriptPath)) {
             Messages.showErrorDialog(project, "Script file not found: " + fullScriptPath, "Execution Error");
             scriptEntry.setMissing(true); // 标记为丢失
@@ -241,7 +240,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
             public void actionPerformed(@NotNull AnActionEvent e) {
                 getSelectedScriptEntry().ifPresent(se -> {
                     SyncFilesConfig config = SyncFilesConfig.getInstance(project);
-                    Path scriptBasePath = Paths.get(config.getPythonScriptPath());
+                    Path scriptBasePath = Paths.get(Util.isDirectoryAfterMacroExpansion(project,config.getPythonScriptPath()));
                     Path fullScriptPath = scriptBasePath.resolve(se.path);
                     VirtualFile vf = LocalFileSystem.getInstance().findFileByNioFile(fullScriptPath);
                     if (vf != null) {
@@ -537,6 +536,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
     private void addScriptToGroupDialog(ScriptGroup targetGroup) {
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
         String pythonScriptPathStr = config.getPythonScriptPath();
+        pythonScriptPathStr = Util.isDirectoryAfterMacroExpansion(project,pythonScriptPathStr);
         if (StringUtil.isEmptyOrSpaces(pythonScriptPathStr)) {
             Messages.showErrorDialog(project, "Python Scripts Directory is not configured in settings.", "Cannot Add Script");
             return;
@@ -1020,24 +1020,25 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
     private void executeScriptDirectly(Project project, String pythonExecutable, String scriptPath, Map<String, String> envVars, String displayName) {
         LOG.info("Executing directly: " + pythonExecutable + " " + scriptPath);
         Util.forceRefreshVFS(scriptPath); // 确保文件已同步
-
+        scriptPath = Util.isDirectoryAfterMacroExpansion(project,scriptPath);
+        String finalScriptPath = scriptPath;
         ProgressManager.getInstance().run(new Task.Backgroundable(project, "Running: " + displayName, true) {
             @Override
             public void run(@NotNull ProgressIndicator indicator) {
                 indicator.setIndeterminate(true);
-                indicator.setText("Executing " + Paths.get(scriptPath).getFileName().toString());
+                indicator.setText("Executing " + Paths.get(finalScriptPath).getFileName().toString());
                 StringBuilder output = new StringBuilder();
                 StringBuilder errorOutput = new StringBuilder();
                 int exitCode = -1;
 
                 try {
-                    ProcessBuilder pb = new ProcessBuilder(pythonExecutable, scriptPath);
+                    ProcessBuilder pb = new ProcessBuilder(pythonExecutable, finalScriptPath);
                     Map<String, String> effectiveEnv = new HashMap<>(EnvironmentUtil.getEnvironmentMap());
                     effectiveEnv.putAll(envVars);
                     effectiveEnv.put("PYTHONIOENCODING", "UTF-8");
                     pb.environment().clear();
                     pb.environment().putAll(effectiveEnv);
-                    pb.directory(project.getBasePath() != null ? new File(project.getBasePath()) : Paths.get(scriptPath).getParent().toFile());
+                    pb.directory(project.getBasePath() != null ? new File(project.getBasePath()) : Paths.get(finalScriptPath).getParent().toFile());
 
                     Process process = pb.start();
 
@@ -1050,7 +1051,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
                     exitCode = process.waitFor();
 
                 } catch (IOException | InterruptedException e) {
-                    LOG.error("Failed to execute script (direct API): " + scriptPath, e);
+                    LOG.error("Failed to execute script (direct API): " + finalScriptPath, e);
                     errorOutput.append("Execution failed: ").append(e.getMessage());
                     exitCode = -1; // Indicate failure
                 }
@@ -1060,7 +1061,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
                 final int finalExitCode = exitCode;
 
                 ApplicationManager.getApplication().invokeLater(() -> {
-                    String scriptFileName = Paths.get(scriptPath).getFileName().toString();
+                    String scriptFileName = Paths.get(finalScriptPath).getFileName().toString();
                     if (finalExitCode == 0) {
                         String message = "Script '" + scriptFileName + "' executed successfully.\n\nOutput:\n" +
                                 (finalOutput.isEmpty() ? "<No Output>" : finalOutput);
@@ -1075,7 +1076,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
                         else if (finalExitCode != 0) message += "Error: <No specific error message, check logs>";
                         Messages.showErrorDialog(project, message, "Script Failure: " + scriptFileName);
                     }
-                    Util.refreshAllFiles(project); // Refresh VFS
+//                    Util.refreshAllFiles(project); // Refresh VFS
                 });
             }
         });

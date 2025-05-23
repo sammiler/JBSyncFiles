@@ -302,6 +302,7 @@ public class SyncFilesSettingsConfigurable implements Configurable {
 
         // 3. 处理 Python Paths
         String scriptPathText = pythonScriptPathField.getText().trim().replace('\\', '/');
+        scriptPathText = Util.isDirectoryAfterMacroExpansion(project,scriptPathText);
         if (!scriptPathText.isEmpty()) {
             try {
                 Path path = Paths.get(scriptPathText);
@@ -315,6 +316,7 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         config.setPythonScriptPath(scriptPathText); // 先保存路径
 
         String exePathText = pythonExecutablePathField.getText().trim().replace('\\', '/');
+        exePathText = Util.isDirectoryAfterMacroExpansion(project,exePathText);
         if (!exePathText.isEmpty()) {
             try {
                 Path path = Paths.get(exePathText);
@@ -385,8 +387,9 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         for (int i = 0; i < watchEntriesFromUI.size(); i++) {
             WatchEntry entry = watchEntriesFromUI.get(i);
             String entryWatchedPath = entry.watchedPath != null ? entry.watchedPath.trim().replace('\\', '/') : "";
+            entryWatchedPath = Util.isDirectoryAfterMacroExpansion(project,entryWatchedPath);
             String entryOnEventScript = entry.onEventScript != null ? entry.onEventScript.trim().replace('\\', '/') : "";
-
+            entryOnEventScript = Util.isDirectoryAfterMacroExpansion(project,entryOnEventScript);
             if (StringUtil.isEmptyOrSpaces(entryWatchedPath)) {
                 throw new ConfigurationException("Watch Entry #" + (i + 1) + ": 'Path to Watch' cannot be empty.");
             }
@@ -414,6 +417,11 @@ public class SyncFilesSettingsConfigurable implements Configurable {
                     if (!Files.exists(realPath)) {
                         throw new ConfigurationException("Watch Entry #" + (i + 1) + ": Relative Path don't exist: '" + entryOnEventScript + "'. ");
                     }
+                    if (Files.exists(realPath) && Files.isDirectory(realPath))
+                    {
+                        throw new ConfigurationException("Watch Entry #" + (i + 1) + ": Relative Path can not be Dir: '" + entryOnEventScript + "'. ");
+                    }
+
                 }
 
             } else { // 脚本是绝对路径，可以做个简单存在性检查（可选）
