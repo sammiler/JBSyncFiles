@@ -3,6 +3,7 @@ package com.example.syncfiles;
 
 import com.intellij.util.xmlb.annotations.Attribute;
 import com.intellij.util.xmlb.annotations.Tag;
+
 import java.nio.file.Paths;
 import java.util.Objects;
 import java.util.UUID;
@@ -27,7 +28,8 @@ public class ScriptEntry {
     // Transient field, not persisted, for UI to indicate if file is missing
     private transient boolean isMissing = false;
 
-    public ScriptEntry() {}
+    public ScriptEntry() {
+    }
 
     public ScriptEntry(String path) {
         this.path = path != null ? path.replace('\\', '/') : "";
@@ -37,11 +39,23 @@ public class ScriptEntry {
         if (alias != null && !alias.trim().isEmpty()) {
             return alias.trim();
         }
-        return path.isEmpty() ? "Unnamed Script" : Paths.get(path).getFileName().toString();
+        if (path.isEmpty())
+            return "Unnamed Script";
+        String fileName = Paths.get(path).getFileName().toString();
+        int dotIndex = fileName.lastIndexOf('.');
+        if (dotIndex != -1) {
+            fileName = fileName.substring(0, dotIndex);
+        }
+        return fileName;
     }
 
-    public boolean isMissing() { return isMissing; }
-    public void setMissing(boolean missing) { isMissing = missing; }
+    public boolean isMissing() {
+        return isMissing;
+    }
+
+    public void setMissing(boolean missing) {
+        isMissing = missing;
+    }
 
     // equals and hashCode based on ID
     @Override

@@ -43,6 +43,15 @@
     ]]></description>
 
     <change-notes><![CDATA[
+    <b>Version 4.0.0</b>
+    <ul>
+        <li><b>Enhanced Script Management</b>: Introducing script grouping and categorization for Python executables, allowing for a more organized and efficient workflow.</li>
+        <li><b>Flexible Terminal Execution</b>: Scripts now run by default in your preferred terminal environment, with improved compatibility across various terminal types.</li>
+        <li><b>Custom Environment Variables</b>: Easily pass custom environment variables to your Python scripts during execution, providing greater control and flexibility without modifying script code.</li>
+        <!-- 如果 "Add Folder" 是一个独立的重要特性，可以保留或详细说明，例如: -->
+        <!-- <li><b>Simplified Folder Integration</b>: Added new ways to work with script folders for easier management and discovery.</li> -->
+        <!-- 如果 "Add Folder" 只是对脚本管理的一种辅助，上面的第一点可能已涵盖其核心 -->
+    </ul>
     <b>Version 3.5.0 (Conceptual - based on your request)</b>
     <ul>
         <li><b>Feature: File/Directory Watchers</b>: Added ability to monitor specified files or directories and execute a Python script on changes (create, modify, delete). Event type and affected path are passed to the script. Configurable in Settings.</li>
@@ -75,9 +84,9 @@
     <ul>
       <li>Fix: Resolved UI update confusion when opening multiple windows for the same project.</li>
       <li>Fix: Resolved configuration and directory monitoring conflicts when opening multiple IDE instances.</li>
-      <li>Fix: Corrected potential `ArrayIndexOutOfBoundsException` during file comparison.</li>
+      <li>Fix: Corrected potential <code>ArrayIndexOutOfBoundsException</code> during file comparison.</li>
       <li>Improvement: Enhanced error handling and progress display during synchronization.</li>
-      <li>Improvement: Used `backgroundPostStartupActivity` for startup initialization.</li>
+      <li>Improvement: Used <code>backgroundPostStartupActivity</code> for startup initialization.</li>
       <li>Improvement: Optimized settings UI experience and input validation.</li>
     </ul>
     ]]></change-notes>

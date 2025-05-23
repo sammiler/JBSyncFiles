@@ -153,7 +153,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
             @Override
             public void configurationChanged() {
                 // 配置变化后，从配置更新树 (不需要强制扫描磁盘，除非脚本路径也变了)
-                ApplicationManager.getApplication().invokeLater(() -> updateScriptTree(false));
+                ApplicationManager.getApplication().invokeLater(() -> updateScriptTree(true));
             }
 
             @Override
