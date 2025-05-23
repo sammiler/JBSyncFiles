@@ -67,7 +67,13 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
     private DefaultTreeModel treeModel;
     private DefaultMutableTreeNode rootNode;
     private Project project; // 当前 Project
-
+    private final Map<ShellTerminalWidget,TerminalType> terminalTypeMap = new HashMap<>();
+    enum TerminalType
+    {
+        POWERSHELL,
+        CMD,
+        BASH
+    }
     @Override
     public void createToolWindowContent(@NotNull Project project, @NotNull ToolWindow toolWindow) {
         this.project = project;
@@ -776,31 +782,15 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
 
     // 在 SyncFilesToolWindowFactory.java 的 executeScriptInTerminal 方法中
 
-    private void executeScriptInTerminal(Project project, String pythonExecutable, String scriptPath, Map<String, String> envVars) {
-        LOG.info("Executing in terminal: " + pythonExecutable + " " + scriptPath);
-        Util.forceRefreshVFS(scriptPath); // 确保文件已同步
 
-        // 获取 Terminal ToolWindow
-        ToolWindow terminalToolWindow = ToolWindowManager.getInstance(project).getToolWindow(org.jetbrains.plugins.terminal.TerminalToolWindowFactory.TOOL_WINDOW_ID);
-        if (terminalToolWindow == null) {
-            Messages.showErrorDialog(project, "Terminal tool window is not available.", "Terminal Error");
-            LOG.warn("Terminal tool window not found.");
-            return;
-        }
-
-        // --- 命令构建开始 (核心修改区域) ---
-        String commandToExecute;
+    private String getCommandExecuteString(TerminalType type,String pythonExecutable, String scriptPath, Map<String, String> envVars)
+    {
+        TerminalType currentType ;
+        StringBuilder commandBuilder = new StringBuilder();
         String normPythonExec = pythonExecutable.replace('\\', '/');
         String normScriptPath = scriptPath.replace('\\', '/');
-
-        // 获取用户配置的 shell 路径，并转为小写以便于判断
-        String actualShellPath = TerminalProjectOptionsProvider.getInstance(project).getShellPath().toLowerCase();
-        LOG.info("Detected actual shell path from settings: " + actualShellPath);
-
-        StringBuilder commandBuilder = new StringBuilder();
-
         // 根据 actualShellPath 判断终端类型并构建命令
-        if (actualShellPath.contains("powershell.exe") || actualShellPath.contains("pwsh.exe")) {
+        if (type == TerminalType.POWERSHELL) {
             // PowerShell (powershell.exe 或 pwsh.exe)
             LOG.info("Shell type identified as PowerShell based on actualShellPath.");
             for (Map.Entry<String, String> entry : envVars.entrySet()) {
@@ -809,7 +799,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
             }
             commandBuilder.append("& '").append(normPythonExec).append("' '").append(normScriptPath).append("'");
 
-        } else if (actualShellPath.contains("cmd.exe")) {
+        } else if (type == TerminalType.CMD) {
             // Windows Command Prompt (cmd.exe)
             LOG.info("Shell type identified as CMD.EXE based on actualShellPath.");
             boolean firstVar = true;
@@ -827,7 +817,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
             }
             commandBuilder.append("\"").append(normPythonExec).append("\" \"").append(normScriptPath).append("\"");
 
-        } else if (actualShellPath.contains("bash") || actualShellPath.contains("zsh") || actualShellPath.contains("sh")) {
+        } else {
             // Bash (e.g., git-bash.exe, /bin/bash), Zsh (/bin/zsh), Sh (/bin/sh)
             // This will also catch paths like "C:\Program Files\Git\bin\bash.exe"
             LOG.info("Shell type identified as Bash/Zsh/Sh (or Git Bash) based on actualShellPath.");
@@ -836,6 +826,36 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
                 commandBuilder.append("export ").append(entry.getKey()).append("='").append(escapedValue).append("'; ");
             }
             commandBuilder.append("\"").append(normPythonExec).append("\" \"").append(normScriptPath).append("\"");
+        }
+        return commandBuilder.toString();
+    }
+    private void executeScriptInTerminal(Project project, String pythonExecutable, String scriptPath, Map<String, String> envVars) {
+        LOG.info("Executing in terminal: " + pythonExecutable + " " + scriptPath);
+        Util.forceRefreshVFS(scriptPath); // 确保文件已同步
+        // 获取 Terminal ToolWindow
+        ToolWindow terminalToolWindow = ToolWindowManager.getInstance(project).getToolWindow(org.jetbrains.plugins.terminal.TerminalToolWindowFactory.TOOL_WINDOW_ID);
+        if (terminalToolWindow == null) {
+            Messages.showErrorDialog(project, "Terminal tool window is not available.", "Terminal Error");
+            LOG.warn("Terminal tool window not found.");
+            return;
+        }
+
+        // 获取用户配置的 shell 路径，并转为小写以便于判断
+        String actualShellPath = TerminalProjectOptionsProvider.getInstance(project).getShellPath().toLowerCase();
+        LOG.info("Detected actual shell path from settings: " + actualShellPath);
+        TerminalType currentType ;
+        // 根据 actualShellPath 判断终端类型并构建命令
+        if (actualShellPath.contains("powershell.exe") || actualShellPath.contains("pwsh.exe")) {
+            currentType = TerminalType.POWERSHELL;
+
+        } else if (actualShellPath.contains("cmd.exe")) {
+            // Windows Command Prompt (cmd.exe)
+            currentType = TerminalType.CMD;
+
+        } else if (actualShellPath.contains("bash") || actualShellPath.contains("zsh") || actualShellPath.contains("sh")) {
+            // Bash (e.g., git-bash.exe, /bin/bash), Zsh (/bin/zsh), Sh (/bin/sh)
+            // This will also catch paths like "C:\Program Files\Git\bin\bash.exe"
+            currentType = TerminalType.BASH;
         } else {
             // 原有的 SystemInfo.isWindows 判断作为最后的备用逻辑, 或者一个更通用的尝试
             // 如果 shellPath 未知，但系统是 Windows，则倾向于 PowerShell
@@ -844,36 +864,24 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
             boolean isLikelyPowerShellFallback = SystemInfo.isWindows; // 使用您代码中已有的变量
 
             if (isLikelyPowerShellFallback) { // 沿用您代码中的 isLikelyPowerShell 变量名
-                LOG.info("Fallback: Assuming PowerShell due to Windows OS.");
-                for (Map.Entry<String, String> entry : envVars.entrySet()) {
-                    String escapedValue = entry.getValue().replace("'", "''");
-                    commandBuilder.append("$env:").append(entry.getKey()).append(" = '").append(escapedValue).append("'; ");
-                }
-                commandBuilder.append("& '").append(normPythonExec).append("' '").append(normScriptPath).append("'");
+                currentType = TerminalType.POWERSHELL;
             } else {
-                LOG.info("Fallback: Assuming Bash/Sh like shell.");
-                for (Map.Entry<String, String> entry : envVars.entrySet()) {
-                    String escapedValue = entry.getValue().replace("'", "'\\''");
-                    commandBuilder.append("export ").append(entry.getKey()).append("='").append(escapedValue).append("'; ");
-                }
-                commandBuilder.append("\"").append(normPythonExec).append("\" \"").append(normScriptPath).append("\"");
+                currentType = TerminalType.BASH;
             }
         }
-        commandToExecute = commandBuilder.toString();
-        // --- 命令构建结束 ---
-
-        LOG.info("Final command to execute in terminal: " + commandToExecute); // 添加日志
 
         // 显示 Terminal ToolWindow 并尝试执行命令
-        final String finalCommandToExecute = commandToExecute; // for lambda
+         // for lambda
         ApplicationManager.getApplication().invokeLater(() -> {
             terminalToolWindow.show(() -> { // 回调会在 ToolWindow 显示后执行
-                ShellTerminalWidget widgetToUse = findOrCreateTerminalWidget(project, terminalToolWindow, "SyncFiles Script"); // 保持您原有的调用
-
+                ShellTerminalWidget widgetToUse = findOrCreateTerminalWidget(project,currentType, terminalToolWindow, "SyncFiles Script"); // 保持您原有的调用
+                String finalCommandToExecute = null;
                 if (widgetToUse != null) {
                     try {
-                        LOG.info("Sending command to terminal widget: " + finalCommandToExecute);
-                        widgetToUse.executeCommand(finalCommandToExecute);
+                        TerminalType type = terminalTypeMap.get(widgetToUse);
+                        String command = getCommandExecuteString(type,pythonExecutable,scriptPath,envVars);
+                        finalCommandToExecute = command;
+                        widgetToUse.executeCommand(command);
                     } catch (IOException e) { // ShellTerminalWidget.executeCommand() throws IOException
                         LOG.error("IOException sending command to terminal widget: " + finalCommandToExecute, e);
                         Messages.showErrorDialog(project, "Error sending command to terminal (IO): " + e.getMessage() + "\nCommand: " + finalCommandToExecute, "Terminal Error");
@@ -891,11 +899,21 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
 
     @Nullable
     public ShellTerminalWidget findOrCreateTerminalWidget(@NotNull Project project,
+                                                          @NotNull TerminalType terminalType,
                                                           @NotNull ToolWindow terminalToolWindow,
                                                           @NotNull @Nls String desiredTabName) {
         ContentManager contentManager = terminalToolWindow.getContentManager();
         TerminalToolWindowManager terminalManager = TerminalToolWindowManager.getInstance(project);
-
+        if (terminalTypeMap.isEmpty())
+        {
+            for (Content content : contentManager.getContents())
+            {
+                if (desiredTabName.equals(content.getDisplayName()))
+                {
+                    terminalManager.closeTab(content);
+                }
+            }
+        }
         // 1. 查找现有终端 (修正获取和类型检查)
         Content selectedContent = contentManager.getSelectedContent();
         if (selectedContent != null && desiredTabName.equals(selectedContent.getDisplayName())) {
@@ -1009,6 +1027,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
             newShellWidget.getTerminalPanel().requestFocusInWindow();
 
             LOG.info("成功使用自定义Runner创建并定位到终端: " + (newTerminalContent != null ? newTerminalContent.getDisplayName() : desiredTabName));
+            terminalTypeMap.put(newShellWidget,terminalType);
             return newShellWidget;
 
         } catch (Exception e) {
