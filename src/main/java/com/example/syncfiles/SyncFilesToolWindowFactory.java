@@ -76,10 +76,11 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
         // 1. 工具栏 (ActionToolbar)
         ActionManager actionManager = ActionManager.getInstance();
         DefaultActionGroup actionGroup = new DefaultActionGroup();
-        actionGroup.add(new AnAction("Refresh Scripts", "Reload scripts from disk and configuration", AllIcons.Actions.Refresh) {
+        actionGroup.add(new AnAction("Refresh Scripts And Work Directory", "Reload scripts from disk and configuration", AllIcons.Actions.Refresh) {
             @Override
             public void actionPerformed(@NotNull AnActionEvent e) {
                 updateScriptTree(true); // true 表示强制从磁盘扫描
+                Util.refreshAllFiles(project);
             }
             @Override
             public @NotNull ActionUpdateThread getActionUpdateThread() { // BGT = Background Thread

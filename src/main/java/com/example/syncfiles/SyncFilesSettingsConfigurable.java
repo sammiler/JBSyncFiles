@@ -239,13 +239,17 @@ public class SyncFilesSettingsConfigurable implements Configurable {
     @Override
     public boolean isModified() {
 
+        List<WatchEntry> currentUIEntries;
+        // 如果 watchEntriesTableModel.getEntries() 返回的是 WatchEntry 对象的深拷贝副本 (如你之前的实现)
+        // 这是可以的
+        currentUIEntries = watchEntriesTableModel.getEntries();
         boolean mappingsChanged = !Comparing.equal(getMappingsFromTable(), originalMappings);
         boolean envVarsChanged = !Comparing.equal(getEnvVarsFromTable(), originalEnvVars);
         // ★★★ 修改这两行 ★★★
         boolean scriptPathChanged = !Objects.equals(pythonScriptPathField.getText().trim(), originalScriptPath);
         boolean exePathChanged = !Objects.equals(pythonExecutablePathField.getText().trim(), originalExePath);
         // ★★★ 修改结束 ★★★
-        boolean watchEntriesChanged = !Comparing.equal(watchEntriesTableModel.getEntries(), originalWatchEntries);
+        boolean watchEntriesChanged = !Comparing.equal(currentUIEntries, originalWatchEntries);
 
         return mappingsChanged || envVarsChanged || scriptPathChanged || exePathChanged || watchEntriesChanged;
     }
@@ -461,7 +465,10 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         originalEnvVars = new HashMap<>(config.getEnvVariables());
         originalScriptPath = config.getPythonScriptPath() != null ? config.getPythonScriptPath() : "";
         originalExePath = config.getPythonExecutablePath() != null ? config.getPythonExecutablePath() : "";
-        originalWatchEntries = new ArrayList<>(config.getWatchEntries());
+        List<WatchEntry> loadedWatchEntries = config.getWatchEntries();
+        this.originalWatchEntries = loadedWatchEntries.stream()
+                .map(entry -> new WatchEntry(entry.watchedPath, entry.onEventScript)) // 为每个 WatchEntry 创建新实例
+                .collect(Collectors.toCollection(ArrayList::new));
 
 
         mappingsTableModel.setRowCount(0);
@@ -476,8 +483,10 @@ public class SyncFilesSettingsConfigurable implements Configurable {
 
         pythonScriptPathField.setText(originalScriptPath);
         pythonExecutablePathField.setText(originalExePath);
-
-        watchEntriesTableModel.setEntries(new ArrayList<>(originalWatchEntries));
+        List<WatchEntry> watchEntriesForTableModel = loadedWatchEntries.stream()
+                .map(entry -> new WatchEntry(entry.watchedPath, entry.onEventScript))
+                .collect(Collectors.toCollection(ArrayList::new));
+        watchEntriesTableModel.setEntries(watchEntriesForTableModel);
     }
 
     private void updateOriginalState() {
@@ -486,7 +495,10 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         originalEnvVars = getEnvVarsFromTable();
         originalScriptPath = pythonScriptPathField.getText().trim();
         originalExePath = pythonExecutablePathField.getText().trim();
-        originalWatchEntries = new ArrayList<>(watchEntriesTableModel.getEntries());
+        List<WatchEntry> currentEntriesInModel = watchEntriesTableModel.getEntries();
+        originalWatchEntries = currentEntriesInModel.stream()
+                .map(entry -> new WatchEntry(entry.watchedPath, entry.onEventScript)) // 深拷贝
+                .collect(Collectors.toCollection(ArrayList::new));
     }
 
 
@@ -553,7 +565,9 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         }
 
         public void setEntries(List<WatchEntry> newEntries) {
-            this.entries = new ArrayList<>(newEntries); // 存储副本
+            this.entries = newEntries.stream()
+                    .map(entry -> new WatchEntry(entry.watchedPath, entry.onEventScript)) // 深拷贝
+                    .collect(Collectors.toCollection(ArrayList::new));
             fireTableDataChanged();
         }
 
