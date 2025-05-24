@@ -4,121 +4,168 @@ import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.util.text.StringUtil; // 引入 StringUtil
+import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
-import com.intellij.openapi.vfs.VirtualFileManager;
-import com.intellij.openapi.vfs.newvfs.BulkFileListener;
-import com.intellij.openapi.vfs.newvfs.events.*;
 import com.intellij.util.EnvironmentUtil;
-import com.intellij.util.messages.MessageBusConnection;
-import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 
 import java.io.BufferedReader;
-import java.io.File; // 引入 File
+import java.io.File;
 import java.io.IOException;
 import java.io.InputStreamReader;
 import java.nio.charset.StandardCharsets;
-import java.nio.file.Files;
-import java.nio.file.InvalidPathException; // 引入 InvalidPathException
-import java.nio.file.Path;
-import java.nio.file.Paths;
+import java.nio.file.*;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-import static com.example.syncfiles.Util.normalizePath;
+import static com.example.syncfiles.Util.normalizePath; // 假设 Util.normalizePath 存在且工作正常
 
 public class FileChangeEventWatcherService implements Disposable {
     private static final Logger LOG = Logger.getInstance(FileChangeEventWatcherService.class);
     private final Project project;
-    private MessageBusConnection connection;
-    private boolean isRunning = false;
-    private final List<ActiveWatch> activeWatchers = new ArrayList<>();
-    private final Set<String> watcherPath = new LinkedHashSet<>();
+    private volatile boolean isRunning = false;
+    private volatile boolean isConfigLoaded = false; // 新增：标记配置是否已加载
+
+    // 使用 ConcurrentHashMap 保证线程安全
+    private final Map<WatchKey, Path> watchKeyToDirPathMap = new ConcurrentHashMap<>();
+    private final List<ActiveWatch> activeWatchers = new ArrayList<>(); // 受 synchronized 方法保护
+    private final Set<String> watcherPath = new HashSet<>(); // 受 synchronized 方法保护
+
     private final ExecutorService scriptExecutorService = Executors.newCachedThreadPool();
+    private WatchService nativeWatchService;
+    private Thread watcherThread;
 
     public FileChangeEventWatcherService(Project project) {
         this.project = project;
         LOG.info("FileChangeEventWatcherService created for project: " + project.getName());
     }
 
-
     public synchronized void addWatcherPath(String path) {
-        if (normalizePath(project, path) != null) {
-            watcherPath.add(normalizePath(project, path));
+        String normalized = normalizePath(project, path); // 确保 normalizePath 返回绝对、规范的路径
+        if (normalized == null) {
+            LOG.warn("[" + project.getName() + "] addWatcherPath: Normalization failed for path: " + path);
+            return;
         }
-        if (!watcherPath.isEmpty()) {
-            if (!isRunning)
+
+        boolean newlyAdded = watcherPath.add(normalized);
+        LOG.info("[" + project.getName() + "] Processed addWatcherPath for: '" + normalized +
+                "'. Newly added: " + newlyAdded +
+                ". isConfigLoaded: " + isConfigLoaded +
+                ". isRunning: " + isRunning);
+
+        if (newlyAdded && isConfigLoaded) {
+            LOG.info("[" + project.getName() + "] Path '" + normalized + "' newly added and config is loaded. Restarting watcher.");
+            if (isRunning) {
+                stopWatching();
+            }
+            if (!activeWatchers.isEmpty() || !watcherPath.isEmpty()) {
                 startWatching();
+            } else {
+                LOG.info("[" + project.getName() + "] No paths to watch after adding '" + normalized + "'. Watcher remains stopped.");
+            }
+        } else if (newlyAdded && !isConfigLoaded) {
+            LOG.info("[" + project.getName() + "] Path '" + normalized + "' newly added. Config not yet loaded. Watcher will be started by updateWatchersFromConfig.");
+            // 初始化时，不在此处启动 watcher，等待 updateWatchersFromConfig
+        } else if (!newlyAdded) {
+            LOG.debug("[" + project.getName() + "] Path '" + normalized + "' was already in watcherPath. No action needed by addWatcherPath.");
         }
     }
 
     public synchronized void removeWatcherPath(String path) {
-        if (normalizePath(project, path) != null) {
-            watcherPath.add(normalizePath(project, path));
+        String normalized = normalizePath(project, path);
+        if (normalized == null) {
+            LOG.warn("[" + project.getName() + "] removeWatcherPath: Normalization failed for path: " + path);
+            return;
+        }
+
+        boolean removed = watcherPath.remove(normalized);
+        LOG.info("[" + project.getName() + "] Processed removeWatcherPath for: '" + normalized + "'. Actually removed: " + removed);
+
+        if (removed && isRunning) { // 只有在运行时且确实移除了路径才重启
+            LOG.info("[" + project.getName() + "] Path '" + normalized + "' removed and watcher was running. Restarting watcher.");
+            stopWatching();
+            if (!activeWatchers.isEmpty() || !watcherPath.isEmpty()) {
+                startWatching();
+            } else {
+                LOG.info("[" + project.getName() + "] No paths left to watch after removal. Watcher stopped.");
+            }
         }
     }
 
     public synchronized void updateWatchersFromConfig() {
-        String projectName = project.getName(); // 用于日志，避免重复调用 project.getName()
+        String projectName = project.getName();
         LOG.info("[" + projectName + "] Updating watchers from config.");
+
+        if (isRunning) {
+            LOG.info("[" + projectName + "] Watcher is running, stopping it before updating config.");
+            stopWatching();
+        } else {
+            LOG.info("[" + projectName + "] Watcher is not running. Proceeding with config update.");
+        }
+
+        // 清理旧的 activeWatchers
+        // activeWatchers 的访问已通过 synchronized(this) 保护，但 clear() 本身是安全的
+        // 为清晰起见，可以显式同步，但由于整个方法已同步，此处不需要额外同步块。
         activeWatchers.clear();
+        LOG.debug("[" + projectName + "] Cleared activeWatchers list.");
 
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
         String pythonExecutable = config.getPythonExecutablePath();
 
-        // 检查 Python 执行文件路径
         if (StringUtil.isEmptyOrSpaces(pythonExecutable)) {
             LOG.warn("[" + projectName + "] Python executable is not configured. File event watching will be disabled.");
-            return;
+            isConfigLoaded = true; // 标记配置已尝试加载
+            return; // 不启动 watcher
         }
         try {
-            if (!Files.isRegularFile(Paths.get(pythonExecutable))) {
+            Path pythonPath = Paths.get(pythonExecutable);
+            if (!Files.isRegularFile(pythonPath)) {
                 LOG.warn("[" + projectName + "] Python executable path is invalid or not a file: '" + pythonExecutable + "'. File event watching will be disabled.");
+                isConfigLoaded = true;
                 return;
             }
         } catch (InvalidPathException e) {
             LOG.warn("[" + projectName + "] Python executable path format is invalid: '" + pythonExecutable + "'. Error: " + e.getMessage() + ". File event watching will be disabled.");
+            isConfigLoaded = true;
             return;
         }
 
         List<WatchEntry> configuredEntries = config.getWatchEntries();
         if (configuredEntries.isEmpty()) {
-            LOG.info("[" + projectName + "] No watch entries configured.");
-            return;
+            LOG.info("[" + projectName + "] No watch entries configured in SyncFilesConfig.");
+        } else {
+            LOG.info("[" + projectName + "] Found " + configuredEntries.size() + " watch entries in SyncFilesConfig.");
         }
 
-        String projectBasePath = project.getBasePath(); // 获取项目根路径，用于解析相对路径
+
+        String projectBasePath = project.getBasePath();
 
         for (WatchEntry entry : configuredEntries) {
-            String watchedPathInput = Util.isDirectoryAfterMacroExpansion(project,entry.watchedPath); // 用户在UI上输入的路径
-            String scriptToRunPathInput = Util.isDirectoryAfterMacroExpansion(project,entry.onEventScript); // 用户输入的脚本路径 (可能是相对或绝对)
+            String watchedPathInput = Util.isDirectoryAfterMacroExpansion(project, entry.watchedPath);
+            String scriptToRunPathInput = Util.isDirectoryAfterMacroExpansion(project, entry.onEventScript);
 
-            if (StringUtil.isEmptyOrSpaces(watchedPathInput) ||
-                    StringUtil.isEmptyOrSpaces(scriptToRunPathInput)) {
+            if (StringUtil.isEmptyOrSpaces(watchedPathInput) || StringUtil.isEmptyOrSpaces(scriptToRunPathInput)) {
                 LOG.warn("[" + projectName + "] Skipping invalid watch entry due to empty paths. Watched: '" + watchedPathInput + "', Script: '" + scriptToRunPathInput + "'");
                 continue;
             }
 
-            // --- 1. 解析和规范化 scriptToRunPathInput (要执行的脚本路径) ---
             Path fullScriptPathToExecute;
             try {
                 Path tempScriptPath = Paths.get(scriptToRunPathInput.replace('\\', '/'));
                 if (tempScriptPath.isAbsolute()) {
                     fullScriptPathToExecute = tempScriptPath.normalize();
                 } else if (!StringUtil.isEmptyOrSpaces(projectBasePath)) {
-                    // 脚本路径是相对的，且全局脚本目录已配置
                     fullScriptPathToExecute = Paths.get(projectBasePath.replace('\\', '/'), scriptToRunPathInput.replace('\\', '/')).normalize();
                 } else {
                     LOG.warn("[" + projectName + "] Cannot resolve relative 'Python Script on Modify': '" + scriptToRunPathInput +
                             "' for 'Path to Watch': '" + watchedPathInput +
-                            "' because 'Python Scripts Directory' is not set. Skipping this watch entry.");
+                            "' because project base path is not set. Skipping this watch entry.");
                     continue;
                 }
-
                 if (!Files.isRegularFile(fullScriptPathToExecute)) {
                     LOG.warn("[" + projectName + "] Script for 'Path to Watch' '" + watchedPathInput +
                             "' does not exist or is not a file: '" + fullScriptPathToExecute + "'. Skipping this watch entry.");
@@ -129,10 +176,7 @@ public class FileChangeEventWatcherService implements Disposable {
                         "' for 'Path to Watch': '" + watchedPathInput + "'. Error: " + e.getMessage() + ". Skipping this watch entry.");
                 continue;
             }
-            // --- scriptToRunPathInput 解析结束 ---
 
-
-            // --- 2. 解析和规范化 watchedPathInput (要监控的路径) ---
             Path absoluteWatchedPathObject;
             try {
                 Path tempWatchedPath = Paths.get(watchedPathInput.replace('\\', '/'));
@@ -153,184 +197,555 @@ public class FileChangeEventWatcherService implements Disposable {
                 continue;
             }
 
-            String finalNormalizedAbsWatchedPath = absoluteWatchedPathObject.toString().replace('\\', '/'); // 确保最终是 / 分隔符
-            // --- watchedPathInput 解析结束 ---
-
-
-            // 检查解析后的被监控路径是否存在以及是否为目录
-            boolean isDirectory = false;
+            String finalNormalizedAbsWatchedPath = absoluteWatchedPathObject.toString().replace('\\', '/');
             boolean pathExists = Files.exists(absoluteWatchedPathObject);
-            if (pathExists) {
-                isDirectory = Files.isDirectory(absoluteWatchedPathObject);
-            } else {
-                LOG.warn("[" + projectName + "] 'Path to Watch': '" + finalNormalizedAbsWatchedPath +
-                        "' currently does not exist. Watch will be added, but may only trigger correctly if it's created as a file, or if its parent is watched and it's created within.");
+            // isDirectoryPretended: true if user configured this path as a directory (even if it doesn't exist yet, or if it exists as a file)
+            // For native WatchService, we watch a dir. If path is a file, we watch its parent.
+            // This flag primarily helps in logging and deciding what *kind* of path the user *intended* to watch.
+            // The actual registration logic will determine the directory to register based on existence and type.
+            boolean isDirectoryPretended = Files.isDirectory(absoluteWatchedPathObject); // More accurately, if it exists AND is a dir.
+            // If it doesn't exist, this is false. User's UI might imply directory.
+            // For simplicity, let's rely on Files.isDirectory for now.
+            // If needed, add a field in WatchEntry from UI: "isDirIntent"
+
+            if (!pathExists) {
+                LOG.warn("[" + projectName + "] Configured 'Path to Watch': '" + finalNormalizedAbsWatchedPath +
+                        "' currently does not exist. Watch will be added. If it's a file, its parent directory will be watched. " +
+                        "If it's intended as a directory, it cannot be watched directly until created.");
+            } else if (!isDirectoryPretended && !Files.isRegularFile(absoluteWatchedPathObject)){
+                LOG.warn("[" + projectName + "] Configured 'Path to Watch': '" + finalNormalizedAbsWatchedPath +
+                        "' exists but is neither a directory nor a regular file. Skipping this watch entry.");
+                continue;
             }
 
             activeWatchers.add(new ActiveWatch(
                     finalNormalizedAbsWatchedPath,
                     fullScriptPathToExecute.toString().replace('\\', '/'),
-                    isDirectory
+                    isDirectoryPretended, // True if the configured path itself resolved to an existing directory
+                    pathExists
             ));
 
-            String typeMsg = pathExists ? (isDirectory ? " (Directory)" : " (File)") : " (Path currently non-existent)";
-            LOG.info("[" + projectName + "] Added watch for: '" + finalNormalizedAbsWatchedPath + "'" + typeMsg +
+            String typeMsg = pathExists ? (isDirectoryPretended ? " (Existing Directory)" : " (Existing File)") : " (Path currently non-existent)";
+            LOG.info("[" + projectName + "] Adding to activeWatchers: '" + finalNormalizedAbsWatchedPath + "'" + typeMsg +
                     " -> executes '" + fullScriptPathToExecute.toString().replace('\\', '/') + "'");
         }
 
-        if (!activeWatchers.isEmpty() || !isRunning) {
+        isConfigLoaded = true; // Mark that configuration has been loaded (or attempted)
+
+        // Start watching only if there are active watchers or paths in watcherPath
+        if (!activeWatchers.isEmpty() || !watcherPath.isEmpty()) {
+            LOG.info("[" + projectName + "] Configuration processed. Attempting to start watcher as there are active/watcherPath entries.");
             startWatching();
         } else {
-            LOG.info("[" + projectName + "] No active watchers were configured after processing entries.");
+            LOG.info("[" + projectName + "] No active watchers or watcherPath entries to start watching after processing config.");
         }
     }
+
 
     private synchronized void startWatching() {
         String projectName = project.getName();
-        if (isRunning || (activeWatchers.isEmpty() && watcherPath.isEmpty())) {
-            if (isRunning) LOG.info("[" + projectName + "] Watcher already running.");
-            if (activeWatchers.isEmpty() && !isRunning) LOG.info("[" + projectName + "] No active watchers to start.");
+        if (isRunning) {
+            LOG.info("[" + projectName + "] Watcher already running. startWatching call ignored.");
+            return;
+        }
+        if (activeWatchers.isEmpty() && watcherPath.isEmpty()) {
+            LOG.info("[" + projectName + "] No paths configured to watch. startWatching call ignored.");
             return;
         }
 
-        LOG.info("[" + projectName + "] Starting FileChangeEventWatcherService...");
-        connection = project.getMessageBus().connect(this);
-        isRunning = true;
+        LOG.info("[" + projectName + "] Attempting to start Native FileChangeEventWatcherService...");
 
-        connection.subscribe(VirtualFileManager.VFS_CHANGES, new BulkFileListener() {
-            @Override
-            public void after(@NotNull List<? extends VFileEvent> events) {
-                if (!isRunning) return;
-                for (VFileEvent event : events) {
-                    processVfsEvent(event);
+        try {
+            if (nativeWatchService != null) {
+                LOG.warn("[" + projectName + "] Existing nativeWatchService (identity: " + System.identityHashCode(nativeWatchService) + ") found before creating new one. Closing it first.");
+                try {
+                    nativeWatchService.close();
+                } catch (IOException e) {
+                    LOG.error("[" + projectName + "] Error closing pre-existing nativeWatchService: " + e.getMessage(), e);
+                }
+                nativeWatchService = null;
+            }
+            nativeWatchService = FileSystems.getDefault().newWatchService();
+            LOG.info("[" + projectName + "] Native WatchService created (identity: " + System.identityHashCode(nativeWatchService) + ").");
+        } catch (IOException e) {
+            LOG.error("[" + projectName + "] Failed to create native WatchService: " + e.getMessage(), e);
+            nativeWatchService = null;
+            return;
+        }
+
+        // isRunning is set to true *after* WatchService creation and before thread start
+        // watchKeyToDirPathMap is cleared here to ensure it's fresh for this new WatchService instance
+        watchKeyToDirPathMap.clear();
+        LOG.info("[" + projectName + "] watchKeyToDirPathMap cleared at the beginning of startWatching. Size: " + watchKeyToDirPathMap.size());
+
+        Set<Path> registeredDirectoriesInThisCycle = new HashSet<>(); // Tracks dirs registered in *this* startWatching call
+
+        // --- 1. Register paths from activeWatchers ---
+        LOG.debug("[" + projectName + "] Processing activeWatchers for registration. Count: " + activeWatchers.size());
+        for (ActiveWatch watch : activeWatchers) {
+            Path dirToRegister = null;
+            try {
+                Path pathObj = Paths.get(watch.watchedPath);
+
+                if (watch.pathExists && watch.isDirectoryPretended) {
+                    dirToRegister = pathObj;
+                } else if (watch.pathExists && !watch.isDirectoryPretended) {
+                    dirToRegister = pathObj.getParent();
+                } else if (!watch.pathExists && watch.isDirectoryPretended) {
+                    LOG.warn("[" + projectName + "] ActiveWatch path '" + watch.watchedPath + "' (intended as dir) does not exist. Cannot watch non-existent directory directly.");
+                    continue;
+                } else { // Not exists, file intent
+                    dirToRegister = pathObj.getParent();
+                }
+
+                if (dirToRegister == null) {
+                    LOG.warn("[" + projectName + "] Cannot determine directory for active watch '" + watch.watchedPath + "' (parent is null or path issue). Skipping.");
+                    continue;
+                }
+                if (!Files.exists(dirToRegister) || !Files.isDirectory(dirToRegister)) {
+                    LOG.warn("[" + projectName + "] Directory to register '" + dirToRegister + "' (for active watch '" + watch.watchedPath + "') does not exist or is not a directory. Skipping.");
+                    continue;
+                }
+
+                if (registeredDirectoriesInThisCycle.contains(dirToRegister)) {
+                    LOG.info("[" + projectName + "] Directory '" + dirToRegister + "' (for active watch '" + watch.watchedPath + "') already processed in this startWatching cycle. Skipping duplicate registration.");
+                    continue;
+                }
+
+                WatchKey key = dirToRegister.register(nativeWatchService, StandardWatchEventKinds.ENTRY_CREATE, StandardWatchEventKinds.ENTRY_DELETE, StandardWatchEventKinds.ENTRY_MODIFY);
+                registeredDirectoriesInThisCycle.add(dirToRegister);
+                int keyIdentityHashCode = System.identityHashCode(key);
+
+                LOG.info("[" + projectName + "] Path (from activeWatch) to be stored in map for Key (identity: " + keyIdentityHashCode + "): " +
+                        "toString: '" + dirToRegister.toString() + "', " +
+                        "hashCode: " + dirToRegister.hashCode() + ", " +
+                        "isAbsolute: " + dirToRegister.isAbsolute() + ", " +
+                        "FileSystem: " + dirToRegister.getFileSystem().toString());
+                try {
+                    LOG.info("[" + projectName + "] Path (from activeWatch) to be stored - toRealPath(): '" + dirToRegister.toRealPath().toString() + "'");
+                } catch (IOException e) {
+                    LOG.warn("[" + projectName + "] Path (from activeWatch) to be stored - toRealPath() failed for '" + dirToRegister + "': " + e.getMessage());
+                }
+
+                Path previousPathForKey = watchKeyToDirPathMap.put(key, dirToRegister);
+                if (previousPathForKey != null) {
+                    LOG.warn("[" + projectName + "] CRITICAL: Replaced existing WatchKey mapping during active watch reg! " +
+                            "Key (identity: " + keyIdentityHashCode + ", valid: " + key.isValid() + ") was for Path: '" + previousPathForKey +
+                            "', now for Path: '" + dirToRegister + "'. Map size: " + watchKeyToDirPathMap.size());
+                } else {
+                    LOG.info("[" + projectName + "] Registered new WatchKey for active watch (identity: " + keyIdentityHashCode +
+                            ", valid: " + key.isValid() + ") for Directory: '" + dirToRegister +
+                            "' (derived from configured path: '" + watch.watchedPath + "'). Map size: " + watchKeyToDirPathMap.size());
+                }
+            } catch (Exception e) {
+                LOG.error("[" + projectName + "] Exception registering active watch '" + watch.watchedPath + "': " + e.getMessage(), e);
+            }
+        }
+
+        // --- 2. Register paths from watcherPath (e.g., config files) ---
+        LOG.debug("[" + projectName + "] Processing watcherPath for registration. Count: " + watcherPath.size());
+        Set<String> currentWatcherPathCopy = new HashSet<>(watcherPath); // Use copy
+        for (String confPathStr : currentWatcherPathCopy) {
+            Path dirToRegisterForConfig = null;
+            try {
+                Path confPathObj = Paths.get(confPathStr);
+                if (Files.exists(confPathObj) && Files.isDirectory(confPathObj)) {
+                    dirToRegisterForConfig = confPathObj;
+                } else {
+                    dirToRegisterForConfig = confPathObj.getParent();
+                }
+
+                if (dirToRegisterForConfig == null) {
+                    LOG.warn("[" + projectName + "] Cannot determine directory for watcherPath entry '" + confPathStr + "'. Skipping.");
+                    continue;
+                }
+                if (!Files.exists(dirToRegisterForConfig) || !Files.isDirectory(dirToRegisterForConfig)) {
+                    LOG.warn("[" + projectName + "] Directory to register '" + dirToRegisterForConfig + "' (for watcherPath '" + confPathStr + "') does not exist or is not a directory. Skipping.");
+                    continue;
+                }
+
+                if (registeredDirectoriesInThisCycle.contains(dirToRegisterForConfig)) {
+                    LOG.info("[" + projectName + "] Directory '" + dirToRegisterForConfig + "' (for watcherPath '" + confPathStr + "') already processed in this startWatching cycle. Skipping.");
+                    continue;
+                }
+
+                WatchKey key = dirToRegisterForConfig.register(nativeWatchService, StandardWatchEventKinds.ENTRY_CREATE, StandardWatchEventKinds.ENTRY_DELETE, StandardWatchEventKinds.ENTRY_MODIFY);
+                registeredDirectoriesInThisCycle.add(dirToRegisterForConfig);
+                int keyIdentityHashCode = System.identityHashCode(key);
+
+                LOG.info("[" + projectName + "] Path (from watcherPath) to be stored in map for Key (identity: " + keyIdentityHashCode + "): " +
+                        "toString: '" + dirToRegisterForConfig.toString() + "', " +
+                        "hashCode: " + dirToRegisterForConfig.hashCode() + ", " +
+                        "isAbsolute: " + dirToRegisterForConfig.isAbsolute() + ", " +
+                        "FileSystem: " + dirToRegisterForConfig.getFileSystem().toString());
+                try {
+                    LOG.info("[" + projectName + "] Path (from watcherPath) to be stored - toRealPath(): '" + dirToRegisterForConfig.toRealPath().toString() + "'");
+                } catch (IOException e) {
+                    LOG.warn("[" + projectName + "] Path (from watcherPath) to be stored - toRealPath() failed for '" + dirToRegisterForConfig + "': " + e.getMessage());
+                }
+
+                Path previousPathForKey = watchKeyToDirPathMap.put(key, dirToRegisterForConfig);
+                if (previousPathForKey != null) {
+                    LOG.warn("[" + projectName + "] CRITICAL: Replaced existing WatchKey mapping during watcherPath reg! " +
+                            "Key (identity: " + keyIdentityHashCode + ", valid: " + key.isValid() + ") was for Path: '" + previousPathForKey +
+                            "', now for Path: '" + dirToRegisterForConfig + "'. Map size: " + watchKeyToDirPathMap.size());
+                } else {
+                    LOG.info("[" + projectName + "] Registered new WatchKey for watcherPath entry (identity: " + keyIdentityHashCode +
+                            ", valid: " + key.isValid() + ") for Directory: '" + dirToRegisterForConfig +
+                            "' (derived from configured path: '" + confPathStr + "'). Map size: " + watchKeyToDirPathMap.size());
+                }
+            } catch (Exception e) {
+                LOG.error("[" + projectName + "] Exception registering watcherPath entry '" + confPathStr + "': " + e.getMessage(), e);
+            }
+        }
+
+        isRunning = true; // Set isRunning true *before* starting the thread.
+
+        if (watchKeyToDirPathMap.isEmpty()) {
+            LOG.warn("[" + projectName + "] No valid paths could be registered. Watcher will not be started.");
+            isRunning = false; // Reset as nothing is watched
+            try {
+                if (nativeWatchService != null) {
+                    nativeWatchService.close();
+                    LOG.info("[" + projectName + "] Closed unused WatchService instance (identity: " + System.identityHashCode(nativeWatchService) + ").");
+                }
+            } catch (IOException e) {
+                LOG.warn("["+projectName+"] Error closing unused WatchService: " + e.getMessage(), e);
+            }
+            nativeWatchService = null;
+            return;
+        }
+
+        if (watcherThread != null && watcherThread.isAlive()) {
+            LOG.warn("[" + projectName + "] Previous watcherThread (" + watcherThread.getName() + ", identity: " + System.identityHashCode(watcherThread) +
+                    ") is still alive. Attempting interrupt and join before starting new one.");
+            watcherThread.interrupt();
+            try {
+                watcherThread.join(1000); // Wait a bit
+                if(watcherThread.isAlive()){
+                    LOG.error("[" + projectName + "] Previous watcherThread did not terminate after interrupt and join!");
+                }
+            } catch (InterruptedException e) {
+                Thread.currentThread().interrupt();
+                LOG.warn("[" + projectName + "] Interrupted while joining previous watcher thread.");
+            }
+        }
+
+        watcherThread = new Thread(new WatcherRunnable(nativeWatchService, project.getName()), "NativeFileWatcherThread-" + project.getName() + "-" + System.currentTimeMillis());
+        watcherThread.setDaemon(true);
+        LOG.info("[" + projectName + "] Starting new WatcherThread (identity: " + System.identityHashCode(watcherThread) +
+                ") for WatchService (identity: " + System.identityHashCode(nativeWatchService) + ").");
+        watcherThread.start();
+
+        LOG.info("[" + projectName + "] Native FileChangeEventWatcherService started successfully. Watching " +
+                watchKeyToDirPathMap.size() + " WatchKeys for " + registeredDirectoriesInThisCycle.size() +
+                " unique directories. Monitored WatchService (identity: " + System.identityHashCode(nativeWatchService) + ").");
+    }
+
+
+    private class WatcherRunnable implements Runnable {
+        private final WatchService serviceInstance; // Store the specific WatchService instance this runnable is for
+        private final String projectName;
+
+        WatcherRunnable(WatchService service, String projectName) {
+            this.serviceInstance = service;
+            this.projectName = projectName;
+            LOG.info("[" + projectName + "] WatcherRunnable created for WatchService (identity: " + System.identityHashCode(serviceInstance) + ")");
+        }
+
+        private String safeGetWatchablePath(WatchKey key) {
+            try {
+                if (!key.isValid()) return "N/A (key invalid on getWatchablePath entry)";
+                Watchable watchable = key.watchable();
+                if (watchable instanceof Path) {
+                    return ((Path) watchable).toString();
+                }
+                return watchable != null ? watchable.getClass().getName() + "@" + System.identityHashCode(watchable) : "null watchable";
+            } catch (Exception e) {
+                // This can happen if the key becomes invalid between isValid() and watchable() or during watchable()
+                return "Error getting watchable path: " + e.getMessage();
+            }
+        }
+
+        @Override
+        public void run() {
+            LOG.info("[" + projectName + "] Native watcher thread (Java Thread ID: " + Thread.currentThread().threadId() + ", identity: " + System.identityHashCode(Thread.currentThread()) + ") started for WatchService (identity: " + System.identityHashCode(serviceInstance) + "). isRunning: " + FileChangeEventWatcherService.this.isRunning);
+            try {
+                while (!Thread.currentThread().isInterrupted() && FileChangeEventWatcherService.this.isRunning) {
+                    if (serviceInstance != FileChangeEventWatcherService.this.nativeWatchService) {
+                        LOG.warn("[" + projectName + "] WatcherThread (for WatchService identity: " + System.identityHashCode(serviceInstance) +
+                                ") detected that its WatchService is no longer the active one (active is: " +
+                                (FileChangeEventWatcherService.this.nativeWatchService == null ? "null" : System.identityHashCode(FileChangeEventWatcherService.this.nativeWatchService)) +
+                                "). Terminating this thread.");
+                        break;
+                    }
+
+                    WatchKey keyFromTake;
+                    try {
+                        keyFromTake = serviceInstance.take();
+                    } catch (InterruptedException e) {
+                        LOG.info("[" + projectName + "] WatcherThread (for WS identity: " + System.identityHashCode(serviceInstance) + ") interrupted (likely during take). Terminating.");
+                        Thread.currentThread().interrupt();
+                        break;
+                    } catch (ClosedWatchServiceException e) {
+                        LOG.info("[" + projectName + "] WatcherThread (for WS identity: " + System.identityHashCode(serviceInstance) + ") detected ClosedWatchServiceException. Terminating.");
+                        break;
+                    } catch (Exception e) {
+                        LOG.error("[" + projectName + "] WatcherThread (for WS identity: " + System.identityHashCode(serviceInstance) + ") encountered unexpected error in take(): " + e.getMessage(), e);
+                        break;
+                    }
+
+                    int keyFromTakeIdentity = System.identityHashCode(keyFromTake);
+                    boolean keyFromTakeIsValidAtReceive = keyFromTake.isValid();
+                    String watchablePathStringAtReceive = safeGetWatchablePath(keyFromTake); // Uses try-catch
+
+                    LOG.debug("[" + projectName + "] WatchService.take() returned WatchKey (identity: " + keyFromTakeIdentity +
+                            ", isValidAtReceive: " + keyFromTakeIsValidAtReceive +
+                            ", watchablePathStringAtReceive: '" + watchablePathStringAtReceive +
+                            "', from WatchService identity: " + System.identityHashCode(serviceInstance) + ")");
+
+                    Path actualWatchedDirForEvent = null;
+                    boolean isKeyDirectlyInMap = false;
+
+                    Path pathFromMapViaKeyIdentity = watchKeyToDirPathMap.get(keyFromTake);
+
+                    if (pathFromMapViaKeyIdentity != null) {
+                        actualWatchedDirForEvent = pathFromMapViaKeyIdentity;
+                        isKeyDirectlyInMap = true;
+                        LOG.debug("[" + projectName + "] WatchKey (identity: " + keyFromTakeIdentity + ") found directly in map, associated with registered Path: '" + actualWatchedDirForEvent + "'");
+                    } else {
+                        LOG.warn("[" + projectName + "] WatchKey (identity: " + keyFromTakeIdentity + ", isValidAtReceive: " + keyFromTakeIsValidAtReceive +
+                                ") was NOT found in watchKeyToDirPathMap via object identity.");
+                        if (keyFromTakeIsValidAtReceive) {
+                            Watchable watchable = keyFromTake.watchable();
+                            if (watchable instanceof Path) {
+                                Path pathFromWatchableKey = (Path) watchable;
+                                LOG.info("[" + projectName + "] Path from key.watchable() (Key identity: " + keyFromTakeIdentity + "): " +
+                                        "toString: '" + pathFromWatchableKey.toString() + "', " +
+                                        "hashCode: " + pathFromWatchableKey.hashCode() + ", " +
+                                        "isAbsolute: " + pathFromWatchableKey.isAbsolute() + ", " +
+                                        "FileSystem: " + pathFromWatchableKey.getFileSystem().toString());
+                                try {
+                                    LOG.info("[" + projectName + "] Path from key.watchable() - toRealPath(): '" + pathFromWatchableKey.toRealPath().toString() + "'");
+                                } catch (IOException e) {
+                                    LOG.warn("[" + projectName + "] Path from key.watchable() - toRealPath() failed for '" + pathFromWatchableKey + "': " + e.getMessage());
+                                }
+
+                                final Path finalPathFromWatchable = pathFromWatchableKey;
+                                Optional<Map.Entry<WatchKey, Path>> matchingEntry = watchKeyToDirPathMap.entrySet().stream()
+                                        .filter(entry -> {
+                                            Path registeredPath = entry.getValue();
+                                            try {
+                                                // Normalize both paths to their real paths as strings for comparison
+                                                String realPathFromWatchableStr = finalPathFromWatchable.toRealPath().toString();
+                                                String realRegisteredPathStr = registeredPath.toRealPath().toString();
+                                                boolean pathsMatch = realPathFromWatchableStr.equals(realRegisteredPathStr);
+
+                                                if (pathsMatch) {
+                                                    LOG.debug("[" + projectName + "] Real path comparison SUCCESS: " +
+                                                            "Registered (real): '" + realRegisteredPathStr + "' (orig: '" + registeredPath + "') matches " +
+                                                            "Watchable (real): '" + realPathFromWatchableStr + "' (orig: '" + finalPathFromWatchable + "')");
+                                                } else {
+                                                    // Only log if a more verbose debug is needed for non-matches
+                                                    // LOG.trace(...);
+                                                }
+                                                return pathsMatch;
+                                            } catch (NoSuchFileException nsfe) { // Important for toRealPath()
+                                                LOG.warn("[" + projectName + "] NoSuchFileException during toRealPath() comparison for " +
+                                                        "Registered: '" + registeredPath + "' or Watchable: '" + finalPathFromWatchable + "'. One of them may have been deleted. Error: " + nsfe.getMessage() + ". Treating as non-match.");
+                                                return false;
+                                            }
+                                            catch (IOException e) {
+                                                LOG.warn("[" + projectName + "] IOException during toRealPath() comparison for " +
+                                                        "Registered: '" + registeredPath + "' or Watchable: '" + finalPathFromWatchable + "'. Error: " + e.getMessage() + ". Treating as non-match.");
+                                                return false;
+                                            }
+                                        })
+                                        .findFirst();
+
+                                if (matchingEntry.isPresent()) {
+                                    actualWatchedDirForEvent = matchingEntry.get().getValue(); // Use the Path object instance we stored
+                                    LOG.info("[" + projectName + "] WatchKey (identity: " + keyFromTakeIdentity +
+                                            ") was not in map by identity, but its watchable Path via toRealPath() MATCHED registered directory Path: '" + actualWatchedDirForEvent +
+                                            "'. Processing event for this resolved directory.");
+                                } else {
+                                    LOG.error(new Throwable("[" + projectName + "] CRITICAL: WatchKey (identity: " + keyFromTakeIdentity +
+                                            ") not in map by identity. Its watchable Path '" + pathFromWatchableKey +
+                                            "' (hc:" + pathFromWatchableKey.hashCode() + ", fs:" + pathFromWatchableKey.getFileSystem() +
+                                            ") does NOT match (via toRealPath().toString()) any Path currently in watchKeyToDirPathMap.values(). Rogue key or severe Path issue. Ignoring event."));
+                                    // actualWatchedDirForEvent remains null
+                                }
+                            } else { // watchable is not a Path
+                                LOG.error("[" + projectName + "] WatchKey (identity: " + keyFromTakeIdentity +
+                                        ") not in map, isValid, but watchable is not a Path instance: " +
+                                        (watchable != null ? watchable.getClass().getName() : "null") + ". Ignoring event.");
+                            }
+                        } else { // keyFromTake was not valid upon receipt
+                            LOG.warn("[" + projectName + "] WatchKey (identity: " + keyFromTakeIdentity + ") not in map AND was already invalid when received from take(). Ignoring event.");
+                        }
+                    }
+
+                    if (actualWatchedDirForEvent == null) {
+                        if (!keyFromTake.reset()) {
+                            LOG.warn("[" + projectName + "] Ignored/Unresolved WatchKey (identity: " + keyFromTakeIdentity +
+                                    ", isValidAtReset: " + keyFromTake.isValid() +
+                                    ") is no longer valid after reset attempt (or was already invalid).");
+                        }
+                        continue;
+                    }
+
+                    List<? extends WatchEvent<?>> events = keyFromTake.pollEvents();
+                    LOG.debug("[" + projectName + "] Polled " + events.size() + " events for WatchKey (identity: " + keyFromTakeIdentity + ") linked to resolved dir: " + actualWatchedDirForEvent);
+
+                    for (WatchEvent<?> event : events) {
+                        WatchEvent.Kind<?> kind = event.kind();
+
+                        if (kind == StandardWatchEventKinds.OVERFLOW) {
+                            LOG.warn("[" + projectName + "] Native WatchService reported OVERFLOW for directory: " + actualWatchedDirForEvent + ". Some events might have been lost.");
+                            final Path dirToRefresh = actualWatchedDirForEvent;
+                            ApplicationManager.getApplication().invokeLater(() -> Util.forceRefreshVFS(dirToRefresh.toString()));
+                            continue;
+                        }
+
+                        if (!(event.context() instanceof Path)) {
+                            LOG.warn("[" + projectName + "] Event context is not a Path for kind " + kind + ". Context: " + event.context() + " (class: " + (event.context() != null ? event.context().getClass().getName() : "null") + "). Skipping event.");
+                            continue;
+                        }
+
+                        @SuppressWarnings("unchecked")
+                        WatchEvent<Path> ev = (WatchEvent<Path>) event;
+                        Path relativeFileName = ev.context();
+                        Path absoluteAffectedPath = actualWatchedDirForEvent.resolve(relativeFileName).normalize();
+                        String affectedPathStr = absoluteAffectedPath.toString().replace('\\', '/');
+
+                        String eventType = null;
+                        if (kind == StandardWatchEventKinds.ENTRY_CREATE) eventType = "Change New";
+                        else if (kind == StandardWatchEventKinds.ENTRY_DELETE) eventType = "Change Del";
+                        else if (kind == StandardWatchEventKinds.ENTRY_MODIFY) eventType = "Change Mod";
+
+                        if (eventType != null) {
+                            LOG.debug("[" + projectName + "] Native Event: " + eventType + " | Relative Path: " + relativeFileName + " | Resolved Abs Path: " + affectedPathStr + " | From Watched Dir: " + actualWatchedDirForEvent);
+                            processNativeWatchEvent(eventType, affectedPathStr, absoluteAffectedPath);
+                        }
+                    }
+
+                    boolean keyStillValidAfterProcessing = keyFromTake.reset();
+                    if (!keyStillValidAfterProcessing) {
+                        LOG.info("[" + projectName + "] WatchKey (identity: " + keyFromTakeIdentity +
+                                ", for resolved path: '" + actualWatchedDirForEvent + "') is no longer valid after reset.");
+                        if (isKeyDirectlyInMap) {
+                            Path removedPath = watchKeyToDirPathMap.remove(keyFromTake);
+                            if (removedPath != null) {
+                                LOG.info("[" + projectName + "] Successfully removed invalid WatchKey (identity: " + keyFromTakeIdentity + ") for path: '" + removedPath + "' from map.");
+                            } else {
+                                LOG.warn("[" + projectName + "] Tried to remove invalid WatchKey (identity: " + keyFromTakeIdentity + ") from map (was directly mapped), but it was already gone (possibly removed by concurrent stop).");
+                            }
+                        } else {
+                            LOG.info("[" + projectName + "] WatchKey (identity: " + keyFromTakeIdentity + ") which was resolved via watchable() became invalid. It was not in map by identity, so no removal from map needed for this specific key object.");
+                        }
+
+                        if (isKeyDirectlyInMap && watchKeyToDirPathMap.isEmpty() && FileChangeEventWatcherService.this.isRunning) {
+                            LOG.info("[" + projectName + "] All directly mapped native watch keys became invalid/removed. Watcher thread might stop if no new registrations occur and service is still 'running'.");
+                        }
+                    }
+                } // end while loop
+            } finally {
+                LOG.info("[" + projectName + "] Native watcher thread (Java Thread ID: " + Thread.currentThread().threadId() + ", identity: " + System.identityHashCode(Thread.currentThread()) + ") finished for WatchService (identity: " + System.identityHashCode(serviceInstance) + ").");
+            }
+        } // end run()
+    }
+
+    private void processNativeWatchEvent(String eventType, String affectedPathStr, Path absoluteAffectedPath) {
+        final String projectName = project.getName();
+        boolean configChangedByWatcherPath = false;
+
+        List<ActiveWatch> matchedActiveWatchers = new ArrayList<>();
+        // Access to activeWatchers list needs to be synchronized if it can be modified externally
+        // Since updateWatchersFromConfig is synchronized, this read should be okay if updates are infrequent
+        // or if activeWatchers is made a CopyOnWriteArrayList (but updateWatchersFromConfig clears and rebuilds it)
+        // For now, assuming synchronized updateWatchersFromConfig is sufficient protection for this read access.
+        // If issues persist, consider making activeWatchers a concurrent collection or synchronizing this block.
+        synchronized (this) { // Synchronize on the service instance to protect activeWatchers list during iteration.
+            // This matches the synchronization on updateWatchersFromConfig.
+            for (ActiveWatch watch : activeWatchers) {
+                if (watch.watchedPath.equals(affectedPathStr)) { // Exact file match
+                    matchedActiveWatchers.add(watch);
+                    continue;
+                }
+                // If configured watch path is a directory, and affected path is a direct child
+                Path configuredWatchedPathObj = Paths.get(watch.watchedPath); // Path from config
+                if (watch.isDirectoryPretended && Files.isDirectory(configuredWatchedPathObj)) { // Ensure it's actually a dir
+                    if (absoluteAffectedPath.getParent() != null && absoluteAffectedPath.getParent().equals(configuredWatchedPathObj)) {
+                        matchedActiveWatchers.add(watch);
+                    }
                 }
             }
-        });
-        LOG.info("[" + projectName + "] FileChangeEventWatcherService started. Watching " + activeWatchers.size() + " configurations.");
-    }
+        }
 
-    private void processVfsEvent(@NotNull VFileEvent event) {
-        String projectName = project.getName();
-        String eventType = null;
-        String affectedPath = null; // VFS 事件原始路径
 
-        // 从事件中提取类型和路径
-        if (event instanceof VFileCreateEvent) {
-            eventType = "Change New";
-            affectedPath = ((VFileCreateEvent) event).getPath(); // 获取路径字符串
-        } else if (event instanceof VFileContentChangeEvent) {
-            eventType = "Change Mod";
-            VirtualFile vf = event.getFile();
-            if (vf != null) affectedPath = vf.getPath();
-        } else if (event instanceof VFileDeleteEvent) {
-            eventType = "Change Del";
-            VirtualFile vf = event.getFile(); // 文件可能已无效，但路径仍有用
-            if (vf != null) affectedPath = vf.getPath();
-        } else if (event instanceof VFileMoveEvent) {
-            eventType = "Change Mod"; // 简单处理为修改，使用移动后的路径
-            VirtualFile vf = event.getFile();
-            if (vf != null) affectedPath = vf.getPath();
-        } else if (event instanceof VFileCopyEvent) {
-            eventType = "Change New";
-            VirtualFile vf = ((VFileCopyEvent) event).findCreatedFile();
-            if (vf != null) affectedPath = vf.getPath();
-        } else if (event instanceof VFilePropertyChangeEvent) {
-            if (VirtualFile.PROP_NAME.equals(((VFilePropertyChangeEvent) event).getPropertyName())) {
-                eventType = "Change Mod"; // 重命名视为修改
-                VirtualFile vf = event.getFile();
-                if (vf != null) affectedPath = vf.getPath();
+        if (!matchedActiveWatchers.isEmpty()) {
+            LOG.info("[" + projectName + "] Relevant Native Event: " + eventType + " | Path: " + affectedPathStr +
+                    " | Matched " + matchedActiveWatchers.size() + " active watchers.");
+            for (ActiveWatch watch : matchedActiveWatchers) {
+                ApplicationManager.getApplication().invokeLater(() -> Util.forceRefreshVFS(watch.watchedPath));
+                LOG.info("[" + projectName + "] Matched active watch: '" + watch.watchedPath + "' -> executes '" + watch.scriptToRun + "'");
+                executeWatchedScript(watch.scriptToRun, eventType, affectedPathStr);
             }
         }
 
-        // 在 FileChangeEventWatcherService.processVfsEvent()
-
-// ... (从 VFileEvent 获取 affectedPath 字符串) ...
-        if (eventType == null || affectedPath == null) {
-            return;
+        Set<String> currentWatcherPaths;
+        synchronized (this) { // Protect watcherPath set during iteration
+            currentWatcherPaths = new HashSet<>(watcherPath);
         }
-
-        final String finalAffectedPath;
-        try {
-            // 1. 确保原始 affectedPath 中的反斜杠被替换为正斜杠
-            String pathWithForwardSlashes = affectedPath.replace('\\', '/');
-            // 2. 使用 Paths.get().normalize() 来处理 ".." 和 "." 等，并获得规范路径对象
-            Path normalizedPathObject = Paths.get(pathWithForwardSlashes).normalize();
-            // 3. 将规范化的 Path 对象转换为字符串，并再次确保是正斜杠
-            finalAffectedPath = normalizedPathObject.toString().replace('\\', '/');
-        } catch (InvalidPathException e) {
-            LOG.warn("[" + projectName + "] Invalid path from VFS event: '" + affectedPath + "'. Error: " + e.getMessage() + ". Skipping event.");
-            return;
-        }
-        final String finalEventType = eventType;
-
-// ... 后续的 filter 逻辑 ...
-// 在 filter 的 lambda 表达式中，watch.watchedPath 也应该是使用 '/' 的绝对规范路径
-
-        List<ActiveWatch> matchedWatchers = activeWatchers.stream()
-                .filter(watch -> {
-                    if (finalAffectedPath.equals(watch.watchedPath)) {
-                        return true;
-                    }
-                    if (watch.isDirectory) {
-                        Path watchedDirObj = Paths.get(watch.watchedPath);
-                        Path affectedPathObj = Paths.get(finalAffectedPath);
-                        if (affectedPathObj.getParent() != null && affectedPathObj.getParent().equals(watchedDirObj)) {
-                            return true;
-                        }
-                        if (finalAffectedPath.startsWith(watch.watchedPath + "/")) {
-                            return true;
-                        }
-                    }
-                    return false;
-                })
-                .collect(Collectors.toList());
-
-        if (!matchedWatchers.isEmpty()) {
-            for (ActiveWatch watch : matchedWatchers)
-            {
-                Util.forceRefreshVFS(watch.watchedPath);
-            }
-            LOG.info("[" + projectName + "] Relevant VFS Event: " + event.getClass().getSimpleName() +
-                    " | Type: " + finalEventType + " | Path: " + finalAffectedPath +
-                    " | Matched " + matchedWatchers.size() + " watchers.");
-
-            for (ActiveWatch watcher : matchedWatchers) {
-                LOG.info("[" + projectName + "] Matched watch: '" + watcher.watchedPath + "' -> executes '" + watcher.scriptToRun + "'");
-                executeWatchedScript(watcher.scriptToRun, finalEventType, finalAffectedPath);
+        for (String singleWatchedFileInSet : currentWatcherPaths) {
+            if (singleWatchedFileInSet.equals(affectedPathStr)) {
+                LOG.info("[" + projectName + "] Native Event on a path in watcherPath (config file set): " + eventType + " | Path: " + affectedPathStr);
+                ApplicationManager.getApplication().invokeLater(() -> Util.forceRefreshVFS(affectedPathStr));
+                configChangedByWatcherPath = true;
+                break;
             }
         }
-        Set<String> exactMatches = watcherPath.stream()
-                .filter(pathInSet -> pathInSet.equals(finalAffectedPath))
-                .collect(Collectors.toSet());
-        if (!exactMatches.isEmpty()) {
-            for (String match : exactMatches) {
-                Util.forceRefreshVFS(match);
-            }
 
-            Util.reloadSyncFilesConfigFromDisk(project);
-            project.getMessageBus().syncPublisher(SyncFilesNotifier.TOPIC).configurationChanged();
+        if (configChangedByWatcherPath) {
+            LOG.info("[" + projectName + "] Change detected on a path in watcherPath set. Reloading configuration.");
+            ApplicationManager.getApplication().invokeLater(() -> {
+                if (project.isDisposed()) return;
+                Util.reloadSyncFilesConfigFromDisk(project);
+                project.getMessageBus().syncPublisher(SyncFilesNotifier.TOPIC).configurationChanged();
+            });
         }
     }
-
 
     private void executeWatchedScript(String scriptPathToExecute, String eventType, String affectedFilePath) {
         String projectName = project.getName();
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
-        String pythonExecutable = config.getPythonExecutablePath(); // 已在 updateWatchersFromConfig 验证过
-        pythonExecutable = Util.isDirectoryAfterMacroExpansion(project,pythonExecutable);
+        String pythonExecutableRaw = config.getPythonExecutablePath();
 
-        String finalPythonExecutable = pythonExecutable;
-        scriptPathToExecute = Util.isDirectoryAfterMacroExpansion(project,scriptPathToExecute);
-        String finalScriptPathToExecute = scriptPathToExecute;
+        if (StringUtil.isEmptyOrSpaces(pythonExecutableRaw)) {
+            LOG.warn("[" + projectName + "] Python executable not configured. Cannot execute script: " + scriptPathToExecute);
+            return;
+        }
+        String pythonExecutable = Util.isDirectoryAfterMacroExpansion(project, pythonExecutableRaw);
+        if (StringUtil.isEmptyOrSpaces(pythonExecutable) || !Files.isRegularFile(Paths.get(pythonExecutable))) {
+            LOG.warn("[" + projectName + "] Python executable path invalid or not a file: '" + pythonExecutable + "'. Cannot execute script: " + scriptPathToExecute);
+            return;
+        }
+
+        String finalScriptPathToExecute = Util.isDirectoryAfterMacroExpansion(project, scriptPathToExecute);
+        if (StringUtil.isEmptyOrSpaces(finalScriptPathToExecute) || !Files.isRegularFile(Paths.get(finalScriptPathToExecute))) {
+            LOG.warn("[" + projectName + "] Script path to execute is invalid or not a file: '" + finalScriptPathToExecute + "'.");
+            return;
+        }
+
         scriptExecutorService.submit(() -> {
             LOG.info("[" + projectName + "] Executing script for file event: '" + finalScriptPathToExecute +
                     "' with args: [" + eventType + ", " + affectedFilePath + "]");
             try {
                 ProcessBuilder pb = new ProcessBuilder(
-                        finalPythonExecutable,
+                        pythonExecutable,
                         finalScriptPathToExecute,
                         eventType,
-                        affectedFilePath // affectedFilePath 已经是 / 分隔的绝对规范路径
+                        affectedFilePath
                 );
 
                 Map<String, String> envVars = new HashMap<>(EnvironmentUtil.getEnvironmentMap());
@@ -345,10 +760,11 @@ public class FileChangeEventWatcherService implements Disposable {
                 if (project.getBasePath() != null) {
                     pb.directory(new File(project.getBasePath()));
                 } else {
-                    // Fallback CWD if project base path is null
                     Path scriptFile = Paths.get(finalScriptPathToExecute);
                     if (scriptFile.getParent() != null) {
                         pb.directory(scriptFile.getParent().toFile());
+                    } else {
+                        LOG.warn("[" + projectName + "] Script has no parent directory and project base path is null. Using default CWD for script: " + finalScriptPathToExecute);
                     }
                 }
 
@@ -360,79 +776,163 @@ public class FileChangeEventWatcherService implements Disposable {
                      BufferedReader errReader = new BufferedReader(new InputStreamReader(process.getErrorStream(), StandardCharsets.UTF_8))) {
                     String line;
                     while ((line = outReader.readLine()) != null) output.append(line).append(System.lineSeparator());
-                    while ((line = errReader.readLine()) != null)
-                        errorOutput.append(line).append(System.lineSeparator());
+                    while ((line = errReader.readLine()) != null) errorOutput.append(line).append(System.lineSeparator());
                 }
                 int exitCode = process.waitFor();
-
                 String scriptFileName = Paths.get(finalScriptPathToExecute).getFileName().toString();
+
                 if (exitCode == 0) {
-                    LOG.info("[" + projectName + "] Script '" + scriptFileName + "' executed successfully for event '" + eventType + "' on '" + affectedFilePath + "'" +
+                    LOG.info("[" + projectName + "] Script '" + scriptFileName + "' executed successfully. Event: '" + eventType + "' on '" + affectedFilePath + "'" +
                             (output.length() > 0 ? ". Output:\n" + output.toString().trim() : ""));
                 } else {
-                    LOG.warn("[" + projectName + "] Script '" + scriptFileName + "' execution failed for event '" + eventType + "' on '" + affectedFilePath +
+                    LOG.warn("[" + projectName + "] Script '" + scriptFileName + "' execution failed. Event: '" + eventType + "' on '" + affectedFilePath +
                             "' (Exit Code: " + exitCode + ")" +
                             (output.length() > 0 ? ". Output:\n" + output.toString().trim() : "") +
                             (errorOutput.length() > 0 ? ". Error:\n" + errorOutput.toString().trim() : ""));
                 }
-//                Util.refreshAllFiles(project);
+
                 ApplicationManager.getApplication().invokeLater(() -> {
-                    // Refresh the VFS for the affected path
-                    // Util.refreshPath(affectedFilePath); // 假设有一个 Util 方法
-                    VirtualFile changedFile = LocalFileSystem.getInstance().refreshAndFindFileByPath(affectedFilePath);
-                    if (changedFile != null) {
-                        changedFile.refresh(false, true); // Async, recursive
-                    } else {
-                        Path parentOfAffected = Paths.get(affectedFilePath).getParent();
-                        if (parentOfAffected != null) {
-                            VirtualFile parentDir = LocalFileSystem.getInstance().refreshAndFindFileByPath(parentOfAffected.toString());
-                            if (parentDir != null) parentDir.refresh(false, true);
+                    if (project.isDisposed()) return;
+                    Path nioAffectedPath = null;
+                    try {
+                        nioAffectedPath = Paths.get(affectedFilePath);
+                    } catch (InvalidPathException e) {
+                        LOG.warn("[" + projectName + "] VFS Refresh: Invalid affectedFilePath: " + affectedFilePath, e);
+                        return;
+                    }
+                    VirtualFile virtualFile = LocalFileSystem.getInstance().refreshAndFindFileByPath(affectedFilePath); // Uses String path
+                    if (virtualFile == null) {
+                        Path parentNioPath = nioAffectedPath.getParent();
+                        if (parentNioPath != null) {
+                            LOG.debug("[" + projectName + "] VFS Refresh: Affected path '" + affectedFilePath + "' not found. Refreshing parent: " + parentNioPath);
+                            LocalFileSystem.getInstance().refreshAndFindFileByPath(parentNioPath.toString());
+                        } else {
+                            LOG.debug("[" + projectName + "] VFS Refresh: Affected path '" + affectedFilePath + "' not found and has no parent.");
                         }
+                    } else {
+                        LOG.debug("[" + projectName + "] VFS refreshed (or found already up-to-date) for: " + virtualFile.getPath());
                     }
                 });
 
             } catch (IOException | InterruptedException e) {
                 LOG.error("[" + projectName + "] Error executing watched script '" + finalScriptPathToExecute + "': " + e.getMessage(), e);
+                if (e instanceof InterruptedException) Thread.currentThread().interrupt();
             }
         });
     }
 
-    private synchronized void stopWatching() {
+    public synchronized void stopWatching() {
         String projectName = project.getName();
-        if (!isRunning) return;
-        LOG.info("[" + projectName + "] Stopping FileChangeEventWatcherService...");
-        isRunning = false;
-        if (connection != null) {
+        LOG.info("[" + projectName + "] Attempting to stop Native FileChangeEventWatcherService... Current isRunning: " + isRunning);
+        if (!isRunning) {
+            LOG.info("[" + projectName + "] Watcher not running or already in process of stopping. Stop request ignored.");
+            return;
+        }
+        isRunning = false; // Signal all loops to stop
+
+        WatchService serviceToClose = this.nativeWatchService; // Capture current instance
+        Thread threadToJoin = this.watcherThread; // Capture current instance
+
+        if (threadToJoin != null && threadToJoin.isAlive()) {
+            LOG.info("[" + projectName + "] Interrupting watcher thread (Java Thread ID: " + threadToJoin.threadId() + ", identity: " + System.identityHashCode(threadToJoin) + ")");
+            threadToJoin.interrupt();
+        } else {
+            LOG.info("[" + projectName + "] Watcher thread was null or not alive at stop time.");
+        }
+
+        if (serviceToClose != null) {
+            LOG.info("[" + projectName + "] Closing native WatchService instance (identity: " + System.identityHashCode(serviceToClose) + ")");
             try {
-                connection.disconnect();
-            } catch (Exception e) {
-                LOG.error("[" + projectName + "] Error disconnecting MessageBus: " + e.getMessage(), e);
-            } finally {
-                connection = null;
+                serviceToClose.close(); // This should cause take() to throw ClosedWatchServiceException
+                LOG.info("[" + projectName + "] Native WatchService (identity: " + System.identityHashCode(serviceToClose) + ") closed successfully.");
+            } catch (IOException e) {
+                LOG.error("[" + projectName + "] Error closing native WatchService (identity: " + System.identityHashCode(serviceToClose) + "): " + e.getMessage(), e);
+            }
+        } else {
+            LOG.info("[" + projectName + "] nativeWatchService was already null at stop time.");
+        }
+
+        this.nativeWatchService = null; // Null out the reference
+        this.watcherThread = null; // Null out the reference
+
+        if (threadToJoin != null) {
+            try {
+                LOG.info("[" + projectName + "] Waiting for watcher thread (Java Thread ID: " + threadToJoin.getName() + ", identity: " + System.identityHashCode(threadToJoin) + ") to join...");
+                threadToJoin.join(5000); // Wait up to 5 seconds
+                if (threadToJoin.isAlive()) {
+                    LOG.warn("[" + projectName + "] Watcher thread (identity: " + System.identityHashCode(threadToJoin) + ") did not terminate in time after interrupt and service close.");
+                } else {
+                    LOG.info("[" + projectName + "] Watcher thread (identity: " + System.identityHashCode(threadToJoin) + ") terminated.");
+                }
+            } catch (InterruptedException e) {
+                LOG.warn("[" + projectName + "] Interrupted while waiting for watcher thread (identity: " + System.identityHashCode(threadToJoin) + ") to terminate.");
+                Thread.currentThread().interrupt();
             }
         }
-        LOG.info("[" + projectName + "] FileChangeEventWatcherService stopped.");
+
+        // Clear map after service and thread are handled
+        // This map is already ConcurrentHashMap, but clear() is fine.
+        int mapSizeBeforeClear = watchKeyToDirPathMap.size();
+        List<Integer> keysIdentitiesBeforeClear = watchKeyToDirPathMap.keySet().stream().map(System::identityHashCode).collect(Collectors.toList());
+        watchKeyToDirPathMap.clear();
+        LOG.info("[" + projectName + "] watchKeyToDirPathMap cleared by stopWatching. Size before: " + mapSizeBeforeClear +
+                (mapSizeBeforeClear > 0 ? ", Keys (identities): " + keysIdentitiesBeforeClear : "") +
+                ". Size after: " + watchKeyToDirPathMap.size());
+        LOG.info("[" + projectName + "] Native FileChangeEventWatcherService stopped logic completed.");
     }
 
     @Override
     public void dispose() {
-        LOG.info("Disposing FileChangeEventWatcherService for project: " + project.getName());
-        stopWatching();
+        String projectName = project.isDisposed() ? "DisposedProject" : project.getName();
+        LOG.info("Disposing FileChangeEventWatcherService for project: " + projectName);
+        stopWatching(); // Ensure watcher is stopped
+
+        // Clear collections, though synchronized methods should handle this if project is closing.
+        // No need for explicit sync here if stopWatching is robust.
         activeWatchers.clear();
+        watcherPath.clear();
+
         if (!scriptExecutorService.isShutdown()) {
-            scriptExecutorService.shutdownNow();
+            LOG.info("[" + projectName + "] Shutting down scriptExecutorService.");
+            scriptExecutorService.shutdown();
+            try {
+                if (!scriptExecutorService.awaitTermination(5, TimeUnit.SECONDS)) {
+                    LOG.warn("[" + projectName + "] scriptExecutorService did not terminate in 5s, forcing shutdownNow().");
+                    scriptExecutorService.shutdownNow();
+                } else {
+                    LOG.info("[" + projectName + "] scriptExecutorService terminated gracefully.");
+                }
+            } catch (InterruptedException e) {
+                LOG.warn("[" + projectName + "] Interrupted during scriptExecutorService shutdown, forcing shutdownNow().");
+                scriptExecutorService.shutdownNow();
+                Thread.currentThread().interrupt();
+            }
         }
+        LOG.info("FileChangeEventWatcherService disposed for project: " + projectName);
     }
 
+    // ActiveWatch class (ensure it's defined as discussed previously)
     private static class ActiveWatch {
-        final String watchedPath;
-        final String scriptToRun;
-        final boolean isDirectory;
+        final String watchedPath;       // Configured path (absolute, normalized with /)
+        final String scriptToRun;       // Script to run (absolute, normalized with /)
+        final boolean isDirectoryPretended; // True if the user configured this path *as if* it's a directory
+        final boolean pathExists;       // True if the watchedPath existed at the time of config parsing
 
-        ActiveWatch(String watchedPath, String scriptToRun, boolean isDirectory) {
-            this.watchedPath = watchedPath;
-            this.scriptToRun = scriptToRun;
-            this.isDirectory = isDirectory;
+        ActiveWatch(String watchedPath, String scriptToRun, boolean isDirectoryPretended, boolean pathExists) {
+            this.watchedPath = watchedPath; // Should be absolute & normalized
+            this.scriptToRun = scriptToRun;   // Should be absolute & normalized
+            this.isDirectoryPretended = isDirectoryPretended;
+            this.pathExists = pathExists;
+        }
+
+        @Override
+        public String toString() {
+            return "ActiveWatch{" +
+                    "watchedPath='" + watchedPath + '\'' +
+                    ", scriptToRun='" + scriptToRun + '\'' +
+                    ", isDirectoryPretended=" + isDirectoryPretended +
+                    ", pathExists=" + pathExists +
+                    '}';
         }
     }
 }

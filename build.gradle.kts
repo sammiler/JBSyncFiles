@@ -1,6 +1,8 @@
+import org.jetbrains.kotlin.gradle.dsl.JvmTarget
+
 plugins {
     id("java")
-    id("org.jetbrains.kotlin.jvm") version "1.9.25"
+    id("org.jetbrains.kotlin.jvm") version "2.0.0"
     id("org.jetbrains.intellij.platform") version "2.3.0" // 或者你使用的 2.x 版本
 }
 java {
@@ -10,7 +12,7 @@ java {
     }
 }
 group = "com.example"
-version = "4.0.2-SNAPSHOT"
+version = "4.1.0-SNAPSHOT"
 
 repositories {
     mavenCentral()
@@ -48,7 +50,7 @@ intellijPlatform {
 
 
         ideaVersion {
-            sinceBuild = "241" // 或 "243" 根据你的需求
+            sinceBuild = "251" // 或 "243" 根据你的需求
             untilBuild = "251.*"
             // untilBuild = "251.*" // 可省略
         }
@@ -63,7 +65,7 @@ tasks {
         options.compilerArgs.add("-Xlint:deprecation")
     }
     withType<org.jetbrains.kotlin.gradle.tasks.KotlinCompile> {
-        kotlinOptions.jvmTarget = "21"
+        compilerOptions.jvmTarget.set(JvmTarget.JVM_21)
     }
     publishPlugin {
         token.set(System.getenv("PUBLISH_TOKEN"))
