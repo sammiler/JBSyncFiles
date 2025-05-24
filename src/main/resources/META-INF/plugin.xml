@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>syncfiles</id> <!-- 您的插件ID -->
     <name>SyncFiles</name> <!-- 您的插件名称 -->
-    <version>4.0.1</version> <!-- 新版本号 -->
+    <version>4.0.2</version> <!-- 新版本号 -->
     <vendor email="sammilergood@gmail.com" url="https://cplusplusbug.org">sammiler</vendor>
 
     <description><![CDATA[
@@ -43,6 +43,10 @@
     ]]></description>
 
     <change-notes><![CDATA[
+            <b>Version 4.0.2</b>
+    <ul>
+        <li><b>Python Scripts On Modify Supports Absolute Path</li>
+    </ul>
         <b>Version 4.0.1</b>
     <ul>
         <li><b>Bug Fixes</li>

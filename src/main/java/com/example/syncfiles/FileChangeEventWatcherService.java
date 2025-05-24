@@ -94,8 +94,8 @@ public class FileChangeEventWatcherService implements Disposable {
         String projectBasePath = project.getBasePath(); // 获取项目根路径，用于解析相对路径
 
         for (WatchEntry entry : configuredEntries) {
-            String watchedPathInput = entry.watchedPath; // 用户在UI上输入的路径
-            String scriptToRunPathInput = entry.onEventScript; // 用户输入的脚本路径 (可能是相对或绝对)
+            String watchedPathInput = Util.isDirectoryAfterMacroExpansion(project,entry.watchedPath); // 用户在UI上输入的路径
+            String scriptToRunPathInput = Util.isDirectoryAfterMacroExpansion(project,entry.onEventScript); // 用户输入的脚本路径 (可能是相对或绝对)
 
             if (StringUtil.isEmptyOrSpaces(watchedPathInput) ||
                     StringUtil.isEmptyOrSpaces(scriptToRunPathInput)) {
