@@ -388,6 +388,7 @@ public class SyncFilesSettingsConfigurable implements Configurable {
 
         // 5. 处理 Watch Entries
         List<WatchEntry> watchEntriesFromUI = watchEntriesTableModel.getEntries();
+        String projectPath = project.getBasePath();
         for (int i = 0; i < watchEntriesFromUI.size(); i++) {
             WatchEntry entry = watchEntriesFromUI.get(i);
             String entryWatchedPath = entry.watchedPath != null ? entry.watchedPath.trim().replace('\\', '/') : "";
@@ -400,11 +401,26 @@ public class SyncFilesSettingsConfigurable implements Configurable {
             if (StringUtil.isEmptyOrSpaces(entryOnEventScript)) {
                 throw new ConfigurationException("Watch Entry #" + (i + 1) + ": 'Python Script on Modify' cannot be empty.");
             }
-            try {
-                Paths.get(entryWatchedPath); // 校验被监控路径格式
-            } catch (InvalidPathException e) {
-                throw new ConfigurationException("Watch Entry #" + (i + 1) + ": Invalid 'Path to Watch' format: '" + entryWatchedPath + "'. " + e.getMessage());
-            }
+
+                Path watchPath =  Paths.get(entryWatchedPath);
+                if (!watchPath.isAbsolute())
+                {
+                    if (projectPath != null) {
+                        Path realPath = Paths.get(projectPath, entryWatchedPath);
+                        if (!Files.exists(realPath))
+                        {
+                            throw new ConfigurationException("Watch Entry #" + (i + 1) + ": 'Path to Watch' Relative Path Don't exist '" );
+                        }
+                    }
+                }
+                else
+                {
+                    if (!Files.exists(watchPath))
+                    {
+                        throw new ConfigurationException("Watch Entry #" + (i + 1) + ": 'Path to Watch' Absolute Path Don't exist '" );
+                    }
+                }
+
 
             // 校验脚本路径
             Path scriptForWatchPath = Paths.get(entryOnEventScript);
@@ -415,7 +431,7 @@ public class SyncFilesSettingsConfigurable implements Configurable {
                 }
 
                 // 这里可以尝试解析为绝对路径，但不强制检查文件是否存在，因为服务启动时会检查
-                String projectPath = project.getBasePath();
+
                 if (projectPath != null) {
                     Path realPath = Paths.get(projectPath, entryOnEventScript);
                     if (!Files.exists(realPath)) {
