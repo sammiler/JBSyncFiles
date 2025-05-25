@@ -113,9 +113,11 @@
     <extensions defaultExtensionNs="com.intellij">
         <!-- Project Level Services -->
         <!-- SyncFilesConfig 现在通过 @Service 注解自动注册, 所以这里不再需要声明 -->
+        <notificationGroup id="SyncFiles.NotificationGroup"
+                           displayType="BALLOON" />
         <projectService serviceImplementation="com.example.syncfiles.ProjectDirectoryWatcherService"/>
         <projectService serviceImplementation="com.example.syncfiles.FileChangeEventWatcherService"/>
-
+        <projectService serviceImplementation="com.example.syncfiles.ProjectWatcherService"/>
         <!-- Startup Activity -->
         <backgroundPostStartupActivity implementation="com.example.syncfiles.WatcherInitializerActivity"/>
 
@@ -128,7 +130,6 @@
                              displayName="SyncFiles Settings"
                              instance="com.example.syncfiles.SyncFilesSettingsConfigurable"/>
     </extensions>
-
 
     <actions>
         <action id="SyncFiles.ManualSync" class="com.example.syncfiles.SyncAction" text="Sync GitHub Files Now"

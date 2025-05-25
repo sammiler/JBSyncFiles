@@ -206,4 +206,59 @@ public final class SyncFilesConfig implements PersistentStateComponent<SyncFiles
             }
         }
     }
+
+    // Inside SyncFilesConfig.java
+
+// ... (existing code) ...
+
+    /**
+     * Removes a specific WatchEntry from the configuration.
+     * This method relies on the WatchEntry class having a correct
+     * implementation of equals() and hashCode().
+     *
+     * @param entryToRemove The WatchEntry object to remove.
+     * @return {@code true} if a matching entry was found and removed, {@code false} otherwise.
+     */
+    public boolean removeWatchEntry(@NotNull WatchEntry entryToRemove) {
+        synchronized (myState) {
+            if (myState.watchEntries == null) {
+                return false; // Should not happen if initialized properly
+            }
+            boolean removed = myState.watchEntries.remove(entryToRemove);
+            if (removed) {
+                setWatchEntries(myState.watchEntries);
+            }
+            return removed;
+        }
+    }
+
+    // If you need to remove based on specific criteria rather than an identical object:
+    /**
+     * Removes WatchEntry items that match the given watched path and script path.
+     *
+     * @param watchedPathToRemove The watched path of the entry to remove.
+     * @param scriptPathToRemove The script path of the entry to remove.
+     * @return {@code true} if at least one matching entry was found and removed, {@code false} otherwise.
+     */
+    public boolean removeWatchEntryByPaths(@Nullable String watchedPathToRemove, @Nullable String scriptPathToRemove) {
+        synchronized (myState) {
+            if (myState.watchEntries == null || myState.watchEntries.isEmpty()) {
+                return false;
+            }
+            // We use removeIf which iterates and removes.
+            // It's important that the comparison logic here matches how you define uniqueness.
+            boolean PENTING = myState.watchEntries.removeIf(entry ->
+                    Objects.equals(entry.watchedPath, watchedPathToRemove) &&
+                            Objects.equals(entry.onEventScript, scriptPathToRemove)
+            );
+//            if (PENTING) {
+//                 System.out.println("SyncFilesConfig: Removed watch entry by paths - Watched='" + watchedPathToRemove + "', Script='" + scriptPathToRemove + "'");
+//            }
+            return PENTING;
+        }
+    }
+
+
+// ... (rest of SyncFilesConfig.java) ...
+
 }
