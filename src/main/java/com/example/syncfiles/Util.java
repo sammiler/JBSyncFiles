@@ -6,6 +6,7 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.util.JDOMUtil;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
+import com.intellij.openapi.vfs.VirtualFileManager;
 import com.intellij.util.xmlb.XmlSerializer;
 import org.jdom.Document;
 import org.jdom.Element;
@@ -29,31 +30,39 @@ import static com.intellij.codeInspection.InspectionApplicationBase.LOG;
 
 public class Util {
 
-
-    // REMOVED: Watcher logic is now entirely within ProjectDirectoryWatcherService
-    // public static void refreshAndSetWatchDir(Project project) throws IOException { ... }
-
+    
     /**
      * Refreshes the Virtual File System for the entire project.
      * Useful after external changes or downloads.
      */
     public static void refreshAllFiles(@NotNull Project project) {
         ApplicationManager.getApplication().invokeLater(() -> {
-            ApplicationManager.getApplication().runWriteAction(() -> { // VFS refresh might need Write Action or just Read Action/EDT
-                String basePath = project.getBasePath();
-                if (basePath != null) {
-                    VirtualFile baseDir = LocalFileSystem.getInstance().findFileByPath(basePath);
-                    if (baseDir != null && baseDir.exists() && baseDir.isDirectory()) {
-                        System.out.println("[" + project.getName() + "] Refreshing VFS recursively from base path: " + basePath);
-                        // Asynchronous refresh (false = async, true = recursive)
-                        baseDir.refresh(false, true);
-                    } else {
-                        System.err.println("[" + project.getName() + "] Failed to find base directory for VFS refresh: " + basePath);
-                    }
+            // 1. 尝试全局刷新 (异步)
+            // 这会尝试刷新所有已知的VFS根，而不仅仅是当前项目
+            System.out.println("Attempting to refresh all VFS roots asynchronously (global)...");
+            VirtualFileManager.getInstance().refreshWithoutFileWatcher(false); // false for asynchronous
+            System.out.println("Global VFS refresh initiated.");
+
+            // 2. 刷新项目特定基路径 (异步)
+            // 这可以确保项目目录被特别关注，即使全局刷新已经包含它，
+            // 这样做通常是无害的，有时可能更可靠地触发特定于该路径的更新。
+            String basePath = project.getBasePath();
+            if (basePath != null) {
+                VirtualFile baseDir = LocalFileSystem.getInstance().findFileByPath(basePath);
+                if (baseDir != null && baseDir.exists() && baseDir.isDirectory()) {
+                    System.out.println("[" + project.getName() + "] Refreshing VFS recursively from base path: " + basePath);
+                    // Asynchronous refresh (false = async, true = recursive)
+                    baseDir.refresh(false, true);
+                    System.out.println("[" + project.getName() + "] Project-specific VFS refresh initiated for: " + basePath);
                 } else {
-                    System.err.println("[" + project.getName() + "] Project base path is null, cannot refresh VFS.");
+                    System.err.println("[" + project.getName() + "] Failed to find base directory for project-specific VFS refresh: " + basePath +
+                            (baseDir == null ? " (baseDir is null)" : " (exists: " + baseDir.exists() + ", isDirectory: " + baseDir.isDirectory() + ")"));
+                    // LOG.warn("[" + project.getName() + "] Failed to find base directory for VFS refresh: " + basePath);
                 }
-            });
+            } else {
+                System.err.println("[" + project.getName() + "] Project base path is null, cannot perform project-specific VFS refresh.");
+                // LOG.warn("[" + project.getName() + "] Project base path is null, cannot refresh VFS.");
+            }
         });
     }
 

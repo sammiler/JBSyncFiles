@@ -16,6 +16,7 @@ import org.jetbrains.annotations.Nullable;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardWatchEventKinds;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -35,6 +36,7 @@ public class ProjectWatcherService implements Disposable {
         COPY,            // Corresponds to VFileCopyEvent
         UNKNOWN          // For any other event types or if determination is not possible
     }
+
     public ProjectWatcherService(Project project) {
         this.project = project;
         LOG.info("ProjectDirectoryWatcherService created for project: " + project.getName());
@@ -46,7 +48,7 @@ public class ProjectWatcherService implements Disposable {
         stopWatching(); // 停止旧的监听
 
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
-        configuredEntries =  config.getWatchEntries();
+        configuredEntries = config.getWatchEntries();
         if (!isRunning)
             startWatching();
     }
@@ -67,35 +69,36 @@ public class ProjectWatcherService implements Disposable {
 
                 for (VFileEvent event : events) {
                     VirtualFile file = event.getFile();
-                    EventType   type = mapEventToEventType(event);
+                    EventType type = mapEventToEventType(event);
                     if (file == null || type == EventType.UNKNOWN) continue;
 
 
                     String filePath = file.getPath().replace('\\', '/');
-                    String parentPath = file.getParent() != null ? file.getParent().getPath().replace('\\', '/') : null;
 
-                    boolean isRelevant = false;
-                    Path path = Path.of(filePath);
-                    if (Files.isDirectory(path) && parentPath == null && type == EventType.REMOVE)
-                    {
-                        isRelevant = true;
-                    }
-                    if (!Files.isDirectory(path) && type == EventType.REMOVE){
-                        isRelevant = true;
-                    }
-                    if (isRelevant)
-                    {
-                        SyncFilesConfig config = SyncFilesConfig.getInstance(project);
-                        List<WatchEntry> watchEntries = configuredEntries.stream().filter(watchEntry -> filePath.equals(watchEntry.watchedPath) || filePath.equals(watchEntry.onEventScript)).toList();
-                        if (!watchEntries.isEmpty())
-                        {
-
-                            for (WatchEntry watchEntry : watchEntries)
+                    List<WatchEntry> watchEntries = configuredEntries.stream().filter(watchEntry ->
                             {
-                                config.removeWatchEntry(watchEntry);
+                                if (filePath.equals(watchEntry.watchedPath))
+                                    return true;
+                                if (filePath.contains(watchEntry.watchedPath) && type == EventType.REMOVE)
+                                    return true;
+                                if(watchEntry.watchedPath.contains(filePath) && type == EventType.REMOVE)
+                                {
+                                    return true;
+                                }
+                                return false;
                             }
-                            configuredEntries = config.getWatchEntries();
+                    ).toList();
+                    if (!watchEntries.isEmpty()) {
+                        String eventType;
+                        if (type == EventType.CREATE) eventType = "Change New";
+                        else if (type == EventType.REMOVE || type == EventType.MOVE) eventType = "Change Del";
+                        else if (type == EventType.MODIFY_CONTENT) eventType = "Change Mod";
+                        else
+                            eventType = "UnKnow";
+                        for (WatchEntry watchEntry : watchEntries) {
+                            project.getMessageBus().syncPublisher(FilesChangeNotifier.TOPIC).watchFileChanged(watchEntry.onEventScript, eventType, watchEntry.watchedPath);
                         }
+
                     }
 
                 }

@@ -42,6 +42,13 @@ public class FileChangeEventWatcherService implements Disposable {
     public FileChangeEventWatcherService(Project project) {
         this.project = project;
         LOG.info("FileChangeEventWatcherService created for project: " + project.getName());
+        project.getMessageBus().connect(this).subscribe(FilesChangeNotifier.TOPIC, new FilesChangeNotifier() {
+
+            @Override
+            public void watchFileChanged(String scriptPathToExecute, String eventType, String affectedFilePath) {
+                executeWatchedScript(scriptPathToExecute,eventType,affectedFilePath);
+            }
+        });
     }
 
     public synchronized void addWatcherPath(String path) {
