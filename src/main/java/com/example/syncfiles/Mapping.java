@@ -31,4 +31,12 @@ public class Mapping {
     public int hashCode() {
         return sourceUrl.hashCode() + targetPath.hashCode();
     }
+
+    @Override
+    public String toString() {
+        return "Mapping{" +
+                "sourceUrl='" + sourceUrl + '\'' +
+                ", targetPath='" + targetPath + '\'' +
+                '}';
+    }
 }

@@ -43,4 +43,13 @@ public class ScriptGroup {
     public int hashCode() {
         return Objects.hash(id);
     }
+
+    @Override
+    public String toString() {
+        return "ScriptGroup{" +
+                "id='" + id + '\'' +
+                ", name='" + name + '\'' +
+                ", scriptCount=" + (scripts != null ? scripts.size() : 0) +
+                '}';
+    }
 }

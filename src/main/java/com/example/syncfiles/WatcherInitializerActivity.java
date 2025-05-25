@@ -29,11 +29,11 @@ public class WatcherInitializerActivity implements ProjectActivity { // 或者 c
         }
         ProjectWatcherService dirWatcher = project.getService(ProjectWatcherService.class);
         if (pyScriptDirWatcher != null) {
-            LOG.info("[" + projectName + "] Initializing ProjectDirectoryWatcherService...");
+            LOG.info("[" + projectName + "] Initializing ProjectWatcherService...");
             dirWatcher.updateWatchedDirectories();
-            LOG.info("[" + projectName + "] ProjectDirectoryWatcherService initialized.");
+            LOG.info("[" + projectName + "] ProjectWatcherService initialized.");
         } else {
-            LOG.error("[" + projectName + "] Failed to get ProjectDirectoryWatcherService instance during project startup.");
+            LOG.error("[" + projectName + "] Failed to get ProjectWatcherService instance during project startup.");
         }
         // 2. 初始化 FileChangeEventWatcherService (监控用户定义的 WatchEntry)
         FileChangeEventWatcherService fileChangeEventWatcher = project.getService(FileChangeEventWatcherService.class);

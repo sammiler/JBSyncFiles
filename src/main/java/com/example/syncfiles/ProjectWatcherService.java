@@ -39,18 +39,24 @@ public class ProjectWatcherService implements Disposable {
 
     public ProjectWatcherService(Project project) {
         this.project = project;
-        LOG.info("ProjectDirectoryWatcherService created for project: " + project.getName());
+        LOG.info("ProjectWatcherService created for project: " + project.getName());
     }
 
     public synchronized void updateWatchedDirectories() {
-        LOG.info("[" + project.getName() + "] Updating watched Python script directory.");
+        LOG.info("[" + project.getName() + "] Updating watched work dir directory.");
         configuredEntries.clear();
         stopWatching(); // 停止旧的监听
 
         SyncFilesConfig config = SyncFilesConfig.getInstance(project);
         configuredEntries = config.getWatchEntries();
         if (!isRunning)
+        {
+            for (WatchEntry entry : configuredEntries){
+                LOG.info("[" + project.getName() + "]  ProjectWatcherService configuredEntry:" + entry.toString());
+            }
             startWatching();
+        }
+
     }
 
     private synchronized void startWatching() {
@@ -70,8 +76,9 @@ public class ProjectWatcherService implements Disposable {
                 for (VFileEvent event : events) {
                     VirtualFile file = event.getFile();
                     EventType type = mapEventToEventType(event);
+                    LOG.info("[" + project.getName() + "]  ProjectWatcherService Before Event:" + event);
                     if (file == null || type == EventType.UNKNOWN) continue;
-
+                    LOG.info("[" + project.getName() + "]  ProjectWatcherService After Event:" + event);
 
                     String filePath = file.getPath().replace('\\', '/');
                     filePath = Util.ensureAbsolutePath(project,filePath);
@@ -80,14 +87,20 @@ public class ProjectWatcherService implements Disposable {
                     List<WatchEntry> watchEntries = configuredEntries.stream().filter(watchEntry ->
                             {
                                 if (finalFilePath != null && finalFilePath.equals(Util.ensureAbsolutePath(project,watchEntry.watchedPath))) return true;
-                                if (finalFilePath != null && finalFilePath.contains(Objects.requireNonNull(Util.ensureAbsolutePath(project, watchEntry.watchedPath))) && type == EventType.REMOVE)
+                                if (finalFilePath != null && finalFilePath.contains(Objects.requireNonNull(Util.ensureAbsolutePath(project, watchEntry.watchedPath))))
                                     return true;
-                                if (finalFilePath != null && Objects.requireNonNull(Util.ensureAbsolutePath(project, watchEntry.watchedPath)).contains(finalFilePath) && type == EventType.REMOVE) {
+                                if (finalFilePath != null && Objects.requireNonNull(Util.ensureAbsolutePath(project, watchEntry.watchedPath)).contains(finalFilePath)) {
                                     return true;
                                 }
                                 return false;
                             }
                     ).toList();
+                    LOG.info("[" + project.getName() + "]  FinalPath :" + finalFilePath);
+                    for (WatchEntry entry : watchEntries)
+                    {
+                        LOG.info("[" + project.getName() + "]  executeWatchedScript  WatchEntry:" + entry.toString());
+                    }
+
                     if (!watchEntries.isEmpty()) {
                         String eventType;
                         if (type == EventType.CREATE) eventType = "Change New";
@@ -96,7 +109,8 @@ public class ProjectWatcherService implements Disposable {
                         else
                             eventType = "UnKnow";
                         for (WatchEntry watchEntry : watchEntries) {
-                            project.getMessageBus().syncPublisher(FilesChangeNotifier.TOPIC).watchFileChanged(watchEntry.onEventScript, eventType, watchEntry.watchedPath);
+                            LOG.info("[" + project.getName() + "]  Single WatchEntry :" + watchEntry.toString());
+                            project.getMessageBus().syncPublisher(FilesChangeNotifier.TOPIC).watchFileChanged(Util.ensureAbsolutePath(project,watchEntry.onEventScript), eventType, Util.ensureAbsolutePath(project,watchEntry.watchedPath));
                         }
 
                     }

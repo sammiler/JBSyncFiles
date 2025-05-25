@@ -33,4 +33,9 @@ public class WatchEntry {
     public int hashCode() {
         return Objects.hash(watchedPath, onEventScript);
     }
+
+    @Override
+    public String toString() {
+        return "WatchedPath: " + watchedPath + ",onEventScript: " + onEventScript +" .";
+    }
 }

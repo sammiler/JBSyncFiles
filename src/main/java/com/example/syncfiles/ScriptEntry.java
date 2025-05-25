@@ -70,4 +70,16 @@ public class ScriptEntry {
     public int hashCode() {
         return Objects.hash(id);
     }
+
+    @Override
+    public String toString() {
+        return "ScriptEntry{" +
+                "id='" + id + '\'' +
+                ", path='" + path + '\'' +
+                ", alias='" + alias + '\'' +
+                ", executionMode='" + executionMode + '\'' +
+                ", description='" + description + '\'' +
+                ", isMissing=" + isMissing +
+                '}';
+    }
 }
