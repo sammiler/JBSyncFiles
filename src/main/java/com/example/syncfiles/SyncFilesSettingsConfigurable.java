@@ -463,6 +463,10 @@ public class SyncFilesSettingsConfigurable implements Configurable {
         if (pyScriptDirWatcher != null) {
             pyScriptDirWatcher.updateWatchedDirectories();
         }
+        ProjectWatcherService dirWatcher = project.getService(ProjectWatcherService.class);
+        if (dirWatcher != null) {
+            dirWatcher.updateWatchedDirectories();
+        }
         FileChangeEventWatcherService fileChangeEventWatcher = project.getService(FileChangeEventWatcherService.class);
         if (fileChangeEventWatcher != null) {
             fileChangeEventWatcher.updateWatchersFromConfig();

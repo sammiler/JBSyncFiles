@@ -4,6 +4,7 @@ import com.intellij.openapi.components.PathMacroManager;
 import com.intellij.openapi.project.Project;
 // No JDOMUtil needed if using SAXBuilder directly for Document
 import com.intellij.openapi.util.JDOMUtil;
+import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.vfs.VirtualFileManager;
@@ -30,7 +31,7 @@ import static com.intellij.codeInspection.InspectionApplicationBase.LOG;
 
 public class Util {
 
-    
+
     /**
      * Refreshes the Virtual File System for the entire project.
      * Useful after external changes or downloads.
@@ -234,5 +235,48 @@ public class Util {
             return expandedPath;
         }
         return  pathWithMaybeMacros;
+    }
+    @Nullable
+    public static String ensureAbsolutePath(@NotNull Project project, @Nullable String pathString) {
+        // 1. 检查输入的路径字符串是否为空或null
+        if (StringUtil.isEmptyOrSpaces(pathString)) {
+            // LOG.debug("输入的路径字符串为 null 或空。");
+            return null;
+        }
+
+        try {
+            // 2. 尝试将字符串转换为 Path 对象。
+            //    Paths.get() 可以处理当前操作系统的路径格式 (包括 \ 和 /)
+            Path path = Paths.get(pathString);
+
+            String absolutePathString;
+
+            // 3. 判断路径是否已经是绝对路径
+            if (path.isAbsolute()) {
+                // 如果已经是绝对路径，直接对其进行规范化。
+                // path.normalize() 会处理 "." 和 ".." 等。
+                // FileUtil.toSystemIndependentName() 会确保所有分隔符是 '/'。
+                absolutePathString = FileUtil.toSystemIndependentName(path.normalize().toString());
+            } else {
+                // 4. 如果是相对路径，获取项目的基路径
+                String projectBasePath = project.getBasePath();
+                if (projectBasePath == null) {
+                    // LOG.warn("项目基路径为 null，无法解析相对路径: " + pathString);
+                    return null; // 没有基路径，无法将相对路径转为绝对路径
+                }
+
+                // 5. 将项目基路径和相对路径结合起来
+                Path basePath = Paths.get(projectBasePath);
+                Path resolvedPath = basePath.resolve(path); // resolve 方法会正确处理路径拼接
+
+                // 6. 对拼接后的路径进行规范化，并确保分隔符为 '/'
+                absolutePathString = FileUtil.toSystemIndependentName(resolvedPath.normalize().toString());
+            }
+            return absolutePathString;
+
+        } catch (InvalidPathException e) {
+            // LOG.warn("无效的路径字符串: " + pathString, e);
+            return null; // 如果路径字符串格式不正确 (例如包含非法字符)
+        }
     }
 }

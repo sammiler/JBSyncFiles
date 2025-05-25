@@ -74,15 +74,15 @@ public class ProjectWatcherService implements Disposable {
 
 
                     String filePath = file.getPath().replace('\\', '/');
+                    filePath = Util.ensureAbsolutePath(project,filePath);
 
+                    String finalFilePath = filePath;
                     List<WatchEntry> watchEntries = configuredEntries.stream().filter(watchEntry ->
                             {
-                                if (filePath.equals(watchEntry.watchedPath))
+                                if (finalFilePath != null && finalFilePath.equals(Util.ensureAbsolutePath(project,watchEntry.watchedPath))) return true;
+                                if (finalFilePath != null && finalFilePath.contains(Objects.requireNonNull(Util.ensureAbsolutePath(project, watchEntry.watchedPath))) && type == EventType.REMOVE)
                                     return true;
-                                if (filePath.contains(watchEntry.watchedPath) && type == EventType.REMOVE)
-                                    return true;
-                                if(watchEntry.watchedPath.contains(filePath) && type == EventType.REMOVE)
-                                {
+                                if (finalFilePath != null && Objects.requireNonNull(Util.ensureAbsolutePath(project, watchEntry.watchedPath)).contains(finalFilePath) && type == EventType.REMOVE) {
                                     return true;
                                 }
                                 return false;
