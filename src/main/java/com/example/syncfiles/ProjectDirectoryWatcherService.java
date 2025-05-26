@@ -1,10 +1,10 @@
 package com.example.syncfiles;
 
+import com.example.syncfiles.notifiers.SyncFilesNotifier;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.vfs.VirtualFileManager;
 import com.intellij.openapi.vfs.newvfs.BulkFileListener;

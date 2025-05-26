@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>syncfiles</id> <!-- 您的插件ID -->
     <name>SyncFiles</name> <!-- 您的插件名称 -->
-    <version>4.1.0</version> <!-- 新版本号 -->
+    <version>4.2.0</version> <!-- 新版本号 -->
     <vendor email="sammilergood@gmail.com" url="https://cplusplusbug.org">sammiler</vendor>
 
     <description><![CDATA[
@@ -118,6 +118,7 @@
         <projectService serviceImplementation="com.example.syncfiles.ProjectDirectoryWatcherService"/>
         <projectService serviceImplementation="com.example.syncfiles.FileChangeEventWatcherService"/>
         <projectService serviceImplementation="com.example.syncfiles.ProjectWatcherService"/>
+        <projectService serviceImplementation="com.example.syncfiles.logic.SmartWorkflowService"/>
         <!-- Startup Activity -->
         <backgroundPostStartupActivity implementation="com.example.syncfiles.WatcherInitializerActivity"/>
 

@@ -1,5 +1,6 @@
 package com.example.syncfiles;
 
+import com.example.syncfiles.notifiers.SyncFilesNotifier;
 import com.intellij.icons.AllIcons;
 import com.intellij.openapi.actionSystem.*;
 import com.intellij.openapi.application.ApplicationManager;
@@ -114,6 +115,8 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
                 return ActionUpdateThread.BGT;
             }
         });
+        actionGroup.add(new Separator());
+        actionGroup.add(new LoadSmartWorkflowAction());
 
 
         ActionToolbar toolbar = actionManager.createActionToolbar("SyncFilesToolbar", actionGroup, true);

@@ -1,7 +1,6 @@
-package com.example.syncfiles;
+package com.example.syncfiles.notifiers;
 
 import com.intellij.util.messages.Topic;
-import com.intellij.openapi.project.Project;
 
 public interface FilesChangeNotifier {
     // 定义一个 Topic，每个项目一个实例

@@ -1,24 +1,17 @@
 package com.example.syncfiles;
 
+import com.example.syncfiles.notifiers.FilesChangeNotifier;
 import com.intellij.openapi.Disposable;
-import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
-import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.vfs.VirtualFileManager;
 import com.intellij.openapi.vfs.newvfs.BulkFileListener;
 import com.intellij.openapi.vfs.newvfs.events.*;
 import com.intellij.util.messages.MessageBusConnection;
 import org.jetbrains.annotations.NotNull;
-import org.jetbrains.annotations.Nullable;
 
-import java.nio.file.Files;
-import java.nio.file.Path;
-import java.nio.file.Paths;
-import java.nio.file.StandardWatchEventKinds;
 import java.util.*;
-import java.util.stream.Collectors;
 
 public class ProjectWatcherService implements Disposable {
     private static final Logger LOG = Logger.getInstance(ProjectDirectoryWatcherService.class);

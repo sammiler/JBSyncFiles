@@ -1,5 +1,6 @@
 package com.example.syncfiles;
 
+import com.example.syncfiles.notifiers.SyncFilesNotifier;
 import com.intellij.openapi.fileChooser.FileChooser;
 import com.intellij.openapi.fileChooser.FileChooserDescriptor;
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory;
@@ -8,16 +9,13 @@ import com.intellij.openapi.options.ConfigurationException;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.TextFieldWithBrowseButton;
 import com.intellij.openapi.util.Comparing;
-import com.intellij.openapi.util.io.FileUtil;
 import com.intellij.openapi.util.text.StringUtil;
-import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.ui.ToolbarDecorator;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.table.JBTable;
 import com.intellij.util.ui.JBUI;
 import org.jetbrains.annotations.Nls;
-import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 
 import javax.swing.*;

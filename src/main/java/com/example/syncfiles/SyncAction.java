@@ -1,5 +1,6 @@
 package com.example.syncfiles;
 
+import com.example.syncfiles.notifiers.FileDownloadFinishedNotifier;
 import com.intellij.openapi.actionSystem.*;
 import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.progress.ProgressManager;
@@ -108,6 +109,9 @@ public class SyncAction extends AnAction {
                     } else {
                         indicator.setText("Synchronization complete.");
                     }
+                    ApplicationManager.getApplication().getMessageBus()
+                            .syncPublisher(FileDownloadFinishedNotifier.TOPIC)
+                            .downloadFinished();
 
                 } catch (Exception ex) {
                     final String errorMessage = "Synchronization failed: " + ex.getMessage();

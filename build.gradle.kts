@@ -12,7 +12,7 @@ java {
     }
 }
 group = "com.example"
-version = "4.1.0-SNAPSHOT"
+version = "4.2.0-SNAPSHOT"
 
 repositories {
     mavenCentral()
@@ -28,6 +28,7 @@ dependencies {
         // bundledPlugin("com.intellij.java")
         bundledPlugin("org.jetbrains.plugins.terminal")
     }
+    implementation("org.yaml:snakeyaml:2.2")
     // implementation("...")
 }
 
