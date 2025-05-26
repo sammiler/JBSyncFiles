@@ -43,6 +43,10 @@
     ]]></description>
 
     <change-notes><![CDATA[
+    <b>Version 4.2.0</b>
+    <ul>
+    <li>Added a Smart Action button to quickly and intelligently load plugin state/configuration</li>
+    </ul>
     <b>Version 4.1.0</b>
     <ul>
     <li>Replaced VFS-based file listeners with Java native <code>java.nio.file.WatchService</code> for significantly improved real-time event detection and responsiveness.</li>

@@ -250,7 +250,7 @@ public class SmartWorkflowService implements Disposable { // 实现 Disposable
         // 我们这里的目标是：YAML中定义的 envVariables + 一些自动添加的通用变量（如果它们不在YAML中）
         // 这里的 resolveValue 是为了解析 YAML 中可能存在的 "$PROJECT_DIR$" 等
         if (project != null && project.getBasePath() != null) {
-            effectiveEnvVars.put("PROJECT_DIR", project.getBasePath()); // 实际路径
+            effectiveEnvVars.put("PROJECT_DIR", Util.isDirectoryAfterMacroExpansion(project,project.getBasePath())); // 实际路径
         }
         String userHome = System.getProperty("user.home");
         if (userHome != null) {
