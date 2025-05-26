@@ -27,6 +27,7 @@ import java.util.zip.ZipInputStream;
 
 public class SyncAction extends AnAction {
 
+    private boolean workflowCall = false;
     @Override
     public @NotNull ActionUpdateThread getActionUpdateThread() {
         return ActionUpdateThread.BGT; // Background thread is fine for update check
@@ -38,7 +39,10 @@ public class SyncAction extends AnAction {
     public SyncAction() {
         super("Sync Files");
     }
-
+    public SyncAction(boolean workflowCall)
+    {
+        this.workflowCall = workflowCall;
+    }
     @Override
     public void actionPerformed(@NotNull AnActionEvent e) {
         Project project = e.getProject();
@@ -109,9 +113,13 @@ public class SyncAction extends AnAction {
                     } else {
                         indicator.setText("Synchronization complete.");
                     }
-                    ApplicationManager.getApplication().getMessageBus()
-                            .syncPublisher(FileDownloadFinishedNotifier.TOPIC)
-                            .downloadFinished();
+                    if (workflowCall)
+                    {
+                        ApplicationManager.getApplication().getMessageBus()
+                                .syncPublisher(FileDownloadFinishedNotifier.TOPIC)
+                                .downloadFinished();
+                    }
+
 
                 } catch (Exception ex) {
                     final String errorMessage = "Synchronization failed: " + ex.getMessage();

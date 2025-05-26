@@ -129,7 +129,7 @@ public class SmartWorkflowService implements Disposable { // 实现 Disposable
         LOG.info("Triggering SyncAction.syncFiles(project) with updated mappings.");
         ApplicationManager.getApplication().invokeLater(() -> {
             try {
-                new SyncAction().syncFiles(project); // SyncAction 完成后会发布 FileDownloadFinishedNotifier 事件
+                new SyncAction(true).syncFiles(project); // SyncAction 完成后会发布 FileDownloadFinishedNotifier 事件
                 LOG.info("SyncAction.syncFiles(project) successfully invoked.");
                 // 此时不直接显示成功消息，等待 downloadFinished 事件后的最终结果
             } catch (Exception e) {
