@@ -279,4 +279,26 @@ public class Util {
             return null; // 如果路径字符串格式不正确 (例如包含非法字符)
         }
     }
+
+    public static  @NotNull String toWindowsPath(@NotNull String path) {
+        if (path.isEmpty()) {
+            return "";
+        }
+        return path.replace('/', '\\');
+    }
+
+    /**
+     * Converts a file path to use Unix-style forward slash separators.
+     * All backslashes ('\') will be replaced with forward slashes ('/').
+     *
+     * @param path The input file path string. Can be null.
+     * @return The path string with Unix-style separators, or null if the input was null.
+     *         Returns an empty string if the input was an empty string.
+     */
+    public static @NotNull String toUnixPath(@NotNull String path) {
+        if (path.isEmpty()) {
+            return "";
+        }
+        return path.replace('\\', '/');
+    }
 }

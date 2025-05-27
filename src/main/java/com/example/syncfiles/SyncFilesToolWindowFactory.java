@@ -2,6 +2,9 @@ package com.example.syncfiles;
 
 import com.example.syncfiles.notifiers.SyncFilesNotifier;
 import com.intellij.icons.AllIcons;
+import com.intellij.openapi.Disposable;
+import com.jediterm.terminal.TextStyle;
+import com.jediterm.terminal.model.*;
 import com.intellij.openapi.actionSystem.*;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
@@ -17,6 +20,7 @@ import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.ComboBox;
 import com.intellij.openapi.ui.DialogWrapper;
 import com.intellij.openapi.ui.Messages;
+import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.util.SystemInfo;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.vfs.LocalFileSystem;
@@ -43,7 +47,6 @@ import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
 import org.jetbrains.plugins.terminal.ShellTerminalWidget;
 // 核心 Terminal API
-
 import javax.swing.*;
 import javax.swing.tree.*;
 import java.awt.*;
@@ -59,6 +62,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -206,7 +210,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
 
 
         if ("terminal".equalsIgnoreCase(scriptEntry.executionMode)) {
-            executeScriptInTerminal(project, pythonExecutable, fullScriptPath.toString(), config.getEnvVariables());
+            executeScriptInTerminal(project, pythonExecutable, fullScriptPath.toString(), config.getEnvVariables(),"Sync Files");
         } else { // directApi 或其他 (默认为 directApi)
             executeScriptDirectly(project, pythonExecutable, fullScriptPath.toString(), config.getEnvVariables(), scriptEntry.getDisplayName());
         }
@@ -832,74 +836,117 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
         }
         return commandBuilder.toString();
     }
-    private void executeScriptInTerminal(Project project, String pythonExecutable, String scriptPath, Map<String, String> envVars) {
-        LOG.info("Executing in terminal: " + pythonExecutable + " " + scriptPath);
-        Util.forceRefreshVFS(scriptPath); // 确保文件已同步
-        // 获取 Terminal ToolWindow
-        ToolWindow terminalToolWindow = ToolWindowManager.getInstance(project).getToolWindow(org.jetbrains.plugins.terminal.TerminalToolWindowFactory.TOOL_WINDOW_ID);
+
+    public void executeScriptInTerminal(Project project, String pythonExecutable, String scriptPath, Map<String, String> envVars, String tabName) {
+        LOG.info("Attempting to execute in terminal: " + pythonExecutable + " " + scriptPath + " in tab: " + tabName);
+        Util.forceRefreshVFS(scriptPath);
+
+        final ToolWindow terminalToolWindow = ToolWindowManager.getInstance(project).getToolWindow(TerminalToolWindowFactory.TOOL_WINDOW_ID);
         if (terminalToolWindow == null) {
             Messages.showErrorDialog(project, "Terminal tool window is not available.", "Terminal Error");
             LOG.warn("Terminal tool window not found.");
             return;
         }
 
-        // 获取用户配置的 shell 路径，并转为小写以便于判断
         String actualShellPath = TerminalProjectOptionsProvider.getInstance(project).getShellPath().toLowerCase();
         LOG.info("Detected actual shell path from settings: " + actualShellPath);
-        TerminalType currentType ;
-        // 根据 actualShellPath 判断终端类型并构建命令
+        TerminalType determinedType;
+        String      terminalStartLine;
         if (actualShellPath.contains("powershell.exe") || actualShellPath.contains("pwsh.exe")) {
-            currentType = TerminalType.POWERSHELL;
-
-        } else if (actualShellPath.contains("cmd.exe")) {
-            // Windows Command Prompt (cmd.exe)
-            currentType = TerminalType.CMD;
-
-        } else if (actualShellPath.contains("bash") || actualShellPath.contains("zsh") || actualShellPath.contains("sh")) {
-            // Bash (e.g., git-bash.exe, /bin/bash), Zsh (/bin/zsh), Sh (/bin/sh)
-            // This will also catch paths like "C:\Program Files\Git\bin\bash.exe"
-            currentType = TerminalType.BASH;
+            determinedType = TerminalType.POWERSHELL;
+            terminalStartLine = "PS " + Util.toWindowsPath(Util.isDirectoryAfterMacroExpansion(project,project.getBasePath())) + ">";
         } else {
-            // 原有的 SystemInfo.isWindows 判断作为最后的备用逻辑, 或者一个更通用的尝试
-            // 如果 shellPath 未知，但系统是 Windows，则倾向于 PowerShell
-            // 否则，倾向于 Bash。这是一个备选策略。
-            LOG.warn("Unrecognized shell path: '" + actualShellPath + "'. Falling back to OS-based detection or a default.");
-            boolean isLikelyPowerShellFallback = SystemInfo.isWindows; // 使用您代码中已有的变量
-
-            if (isLikelyPowerShellFallback) { // 沿用您代码中的 isLikelyPowerShell 变量名
-                currentType = TerminalType.POWERSHELL;
+            terminalStartLine = "$";
+            if (actualShellPath.contains("cmd.exe")) {
+                determinedType = TerminalType.CMD;
+            } else if (actualShellPath.contains("bash")) {
+                determinedType = TerminalType.BASH;
+            } else if (actualShellPath.contains("zsh")) {
+                determinedType = TerminalType.BASH;
+            } else if (actualShellPath.contains("sh")) {
+                determinedType = TerminalType.BASH;
             } else {
-                currentType = TerminalType.BASH;
+                LOG.warn("Unrecognized shell path: '" + actualShellPath + "'. Falling back to OS-based detection.");
+                determinedType = SystemInfo.isWindows ? TerminalType.POWERSHELL : TerminalType.BASH;
             }
         }
+        LOG.info("Determined TerminalType for new/reused session: " + determinedType);
 
-        // 显示 Terminal ToolWindow 并尝试执行命令
-         // for lambda
+        final TerminalType finalDeterminedType = determinedType; // for lambda
+        AtomicBoolean endCommandLine = new AtomicBoolean(false);
         ApplicationManager.getApplication().invokeLater(() -> {
-            terminalToolWindow.show(() -> { // 回调会在 ToolWindow 显示后执行
-                ShellTerminalWidget widgetToUse = findOrCreateTerminalWidget(project,currentType, terminalToolWindow, "SyncFiles Script"); // 保持您原有的调用
-                String finalCommandToExecute = null;
-                if (widgetToUse != null) {
-                    try {
-                        TerminalType type = terminalTypeMap.get(widgetToUse);
-                        String command = getCommandExecuteString(type,pythonExecutable,scriptPath,envVars);
-                        finalCommandToExecute = command;
-                        widgetToUse.executeCommand(command);
-                    } catch (IOException e) { // ShellTerminalWidget.executeCommand() throws IOException
-                        LOG.error("IOException sending command to terminal widget: " + finalCommandToExecute, e);
-                        Messages.showErrorDialog(project, "Error sending command to terminal (IO): " + e.getMessage() + "\nCommand: " + finalCommandToExecute, "Terminal Error");
-                    } catch (Exception e) { // 其他运行时异常
-                        LOG.error("Error sending command to terminal widget: " + finalCommandToExecute, e);
-                        Messages.showErrorDialog(project, "Error sending command to terminal: " + e.getMessage() + "\nCommand: " + finalCommandToExecute, "Terminal Error");
+            terminalToolWindow.show(() -> {
+                ShellTerminalWidget widgetToUse = findOrCreateTerminalWidget(project, finalDeterminedType, terminalToolWindow, tabName);
+                if (widgetToUse == null) {
+                    LOG.error("Failed to find or create a suitable terminal widget for tab: " + tabName);
+                    Messages.showErrorDialog(project, "Failed to open or reuse a terminal session for script execution in tab '" + tabName + "'.", "Terminal Error");
+                    return;
+                }
+
+                TerminalType typeForCommand = terminalTypeMap.get(widgetToUse);
+                if (typeForCommand == null) {
+                    LOG.warn("TerminalType for widget in tab '" + tabName + "' not found in map. Using determined type: " + finalDeterminedType);
+                    typeForCommand = finalDeterminedType; // Fallback
+                }
+
+                final String originalCommand = Util.toUnixPath(getCommandExecuteString(typeForCommand, pythonExecutable, scriptPath, envVars));
+                final String uniqueMarker = "CMD_EXIT_" + tabName.replaceAll("\\s+", "_") + "_" + UUID.randomUUID().toString();
+
+                JediTerminal jediTermWidget = (JediTerminal) widgetToUse.getTerminal();
+                if (jediTermWidget == null) {
+                    LOG.error("Could not get JediTermWidget from ShellTerminalWidget for tab: " + tabName);
+                    Messages.showErrorDialog(project, "Internal error: Could not access terminal internals for tab '" + tabName + "'.", "Terminal Error");
+                    return;
+                }
+                final TerminalTextBuffer textBuffer = jediTermWidget.getTerminalTextBuffer();
+
+                // This disposable will manage the lifecycle of the TextBufferChangesListener
+                final Disposable changesListenerDisposable = Disposer.newDisposable("TextBufferChangesListenerDisposable_" + uniqueMarker);
+
+                final TerminalModelListener listener = () -> {
+                    var c = textBuffer.getLine(0).getText();
+                    var line = textBuffer.getScreenLinesStorage();
+                    var c1 = line.get(0).getText();
+                    var commandList = originalCommand.split(" ");
+                     var c11 = commandList[commandList.length - 1];
+                    if (!endCommandLine.get())
+                    {
+                        line.get(0).deleteCharacters(0);
                     }
-                } else {
-                    LOG.error("Failed to find or create a suitable terminal widget for command: " + finalCommandToExecute);
-                    Messages.showErrorDialog(project, "Failed to open or reuse a terminal session for script execution.\nCommand: " + finalCommandToExecute, "Terminal Error");
+                    if (c1.contains(c11))
+                    {
+                        endCommandLine.set(true);
+                        line.get(0).deleteCharacters(0);
+                    }
+
+                };
+
+                try {
+                    textBuffer.addModelListener(listener);
+                    LOG.info("TextBufferChangesListener added for tab: " + tabName);
+
+                    Disposer.register(changesListenerDisposable, () -> {
+                        if (textBuffer != null) { // Check if textBuffer is still valid
+                            textBuffer.removeModelListener(listener);
+                            LOG.info("TextBufferChangesListener removed for tab '" + tabName + "' via Disposer.");
+                        }
+                    });
+
+                    LOG.info("Executing final command in tab '" + tabName + "': " + originalCommand);
+                    widgetToUse.executeCommand(originalCommand);
+
+                } catch (IOException e) {
+                    LOG.error("IOException sending command to terminal for tab '" + tabName + "': " + originalCommand, e);
+                    Messages.showErrorDialog(project, "Error sending command to terminal (IO) for tab '" + tabName + "': " + e.getMessage(), "Terminal Error");
+                    Disposer.dispose(changesListenerDisposable);
+                } catch (Exception e) {
+                    LOG.error("Error during terminal command execution or listener setup for tab '" + tabName + "': " + originalCommand, e);
+                    Messages.showErrorDialog(project, "Error processing command for tab '" + tabName + "': " + e.getMessage(), "Terminal Error");
+                    Disposer.dispose(changesListenerDisposable);
                 }
             });
         });
     }
-
     @Nullable
     public ShellTerminalWidget findOrCreateTerminalWidget(@NotNull Project project,
                                                           @NotNull TerminalType terminalType,
