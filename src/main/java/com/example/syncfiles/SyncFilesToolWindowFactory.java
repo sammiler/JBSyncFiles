@@ -1,10 +1,10 @@
 package com.example.syncfiles;
 
+import com.example.syncfiles.font.LoggingTtyConnectorWrapper;
+import com.example.syncfiles.font.TerminalFontSettingsProvider;
 import com.example.syncfiles.notifiers.SyncFilesNotifier;
 import com.intellij.icons.AllIcons;
 import com.intellij.openapi.Disposable;
-import com.jediterm.terminal.TextStyle;
-import com.jediterm.terminal.model.*;
 import com.intellij.openapi.actionSystem.*;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
@@ -28,15 +28,20 @@ import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowManager;
 import com.intellij.terminal.JBTerminalWidget;
+import com.intellij.terminal.pty.PtyProcessTtyConnector;
 import com.intellij.terminal.ui.TerminalWidget;
+import com.intellij.ui.*;
 import com.intellij.ui.content.Content;
+import com.intellij.ui.content.ContentFactory;
 import com.intellij.ui.content.ContentManager;
+import com.jediterm.terminal.TtyConnector;
+import com.jediterm.terminal.ui.JediTermWidget;
+import com.jediterm.terminal.ui.TerminalSession;
+import com.jediterm.terminal.ui.settings.SettingsProvider;
+import com.pty4j.PtyProcess;
+import com.pty4j.PtyProcessBuilder;
 import org.jetbrains.annotations.Nls;
 import org.jetbrains.plugins.terminal.*;
-import com.intellij.ui.IdeBorderFactory;
-import com.intellij.ui.PopupHandler;
-import com.intellij.ui.ScrollPaneFactory;
-import com.intellij.ui.SideBorder;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBScrollPane;
 import com.intellij.ui.treeStructure.Tree;
@@ -62,7 +67,6 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.List;
-import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -73,6 +77,8 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
     private DefaultMutableTreeNode rootNode;
     private Project project; // 当前 Project
     private final Map<ShellTerminalWidget,TerminalType> terminalTypeMap = new HashMap<>();
+    private final int INIT_COLUMNS = 120;
+    private final int INIT_ROWS     = 40;
     enum TerminalType
     {
         POWERSHELL,
@@ -210,7 +216,8 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
 
 
         if ("terminal".equalsIgnoreCase(scriptEntry.executionMode)) {
-            executeScriptInTerminal(project, pythonExecutable, fullScriptPath.toString(), config.getEnvVariables(),"Sync Files");
+//            executeScriptInTerminal(project, pythonExecutable, fullScriptPath.toString(), config.getEnvVariables());
+            executeScriptInDedicatedPtyTab(project,pythonExecutable,fullScriptPath.toString(),new ArrayList<>(),config.getEnvVariables(),"SyncFiles");
         } else { // directApi 或其他 (默认为 directApi)
             executeScriptDirectly(project, pythonExecutable, fullScriptPath.toString(), config.getEnvVariables(), scriptEntry.getDisplayName());
         }
@@ -785,9 +792,6 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
     }
 
 
-    // --- Script Execution Methods ---
-
-    // 在 SyncFilesToolWindowFactory.java 的 executeScriptInTerminal 方法中
 
 
     private String getCommandExecuteString(TerminalType type,String pythonExecutable, String scriptPath, Map<String, String> envVars)
@@ -837,116 +841,133 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
         return commandBuilder.toString();
     }
 
-    public void executeScriptInTerminal(Project project, String pythonExecutable, String scriptPath, Map<String, String> envVars, String tabName) {
-        LOG.info("Attempting to execute in terminal: " + pythonExecutable + " " + scriptPath + " in tab: " + tabName);
-        Util.forceRefreshVFS(scriptPath);
 
-        final ToolWindow terminalToolWindow = ToolWindowManager.getInstance(project).getToolWindow(TerminalToolWindowFactory.TOOL_WINDOW_ID);
-        if (terminalToolWindow == null) {
-            Messages.showErrorDialog(project, "Terminal tool window is not available.", "Terminal Error");
-            LOG.warn("Terminal tool window not found.");
-            return;
-        }
+        /**
+         * 使用直接的 PTY 进程在新的终端标签页中执行 Python 脚本。
+         *
+         * @param project          当前项目
+         * @param pythonExecutable Python 解释器路径
+         * @param scriptPath       要执行的 Python 脚本路径
+         * @param scriptArguments  传递给 Python 脚本的参数列表
+         * @param customEnvVars    需要为脚本设置的自定义环境变量
+         * @param tabNamePrefix    新终端标签页的名称前缀 (会附加UUID以保证唯一性)
+         */
+        public void executeScriptInDedicatedPtyTab(
+                @NotNull Project project,
+                @NotNull String pythonExecutable,
+                @NotNull String scriptPath,
+                @NotNull List<String> scriptArguments, // 明确脚本参数
+                @NotNull Map<String, String> customEnvVars,
+                @NotNull String tabNamePrefix) {
 
-        String actualShellPath = TerminalProjectOptionsProvider.getInstance(project).getShellPath().toLowerCase();
-        LOG.info("Detected actual shell path from settings: " + actualShellPath);
-        TerminalType determinedType;
-        String      terminalStartLine;
-        if (actualShellPath.contains("powershell.exe") || actualShellPath.contains("pwsh.exe")) {
-            determinedType = TerminalType.POWERSHELL;
-            terminalStartLine = "PS " + Util.toWindowsPath(Util.isDirectoryAfterMacroExpansion(project,project.getBasePath())) + ">";
-        } else {
-            terminalStartLine = "$";
-            if (actualShellPath.contains("cmd.exe")) {
-                determinedType = TerminalType.CMD;
-            } else if (actualShellPath.contains("bash")) {
-                determinedType = TerminalType.BASH;
-            } else if (actualShellPath.contains("zsh")) {
-                determinedType = TerminalType.BASH;
-            } else if (actualShellPath.contains("sh")) {
-                determinedType = TerminalType.BASH;
-            } else {
-                LOG.warn("Unrecognized shell path: '" + actualShellPath + "'. Falling back to OS-based detection.");
-                determinedType = SystemInfo.isWindows ? TerminalType.POWERSHELL : TerminalType.BASH;
-            }
-        }
-        LOG.info("Determined TerminalType for new/reused session: " + determinedType);
+            LOG.info("Attempting to execute in a new PTY tab: " + pythonExecutable + " " + scriptPath);
+            Util.forceRefreshVFS(scriptPath); // 确保文件已同步 (如果需要)
 
-        final TerminalType finalDeterminedType = determinedType; // for lambda
-        AtomicBoolean endCommandLine = new AtomicBoolean(false);
-        ApplicationManager.getApplication().invokeLater(() -> {
-            terminalToolWindow.show(() -> {
-                ShellTerminalWidget widgetToUse = findOrCreateTerminalWidget(project, finalDeterminedType, terminalToolWindow, tabName);
-                if (widgetToUse == null) {
-                    LOG.error("Failed to find or create a suitable terminal widget for tab: " + tabName);
-                    Messages.showErrorDialog(project, "Failed to open or reuse a terminal session for script execution in tab '" + tabName + "'.", "Terminal Error");
-                    return;
-                }
-
-                TerminalType typeForCommand = terminalTypeMap.get(widgetToUse);
-                if (typeForCommand == null) {
-                    LOG.warn("TerminalType for widget in tab '" + tabName + "' not found in map. Using determined type: " + finalDeterminedType);
-                    typeForCommand = finalDeterminedType; // Fallback
-                }
-
-                final String originalCommand = Util.toUnixPath(getCommandExecuteString(typeForCommand, pythonExecutable, scriptPath, envVars));
-                final String uniqueMarker = "CMD_EXIT_" + tabName.replaceAll("\\s+", "_") + "_" + UUID.randomUUID().toString();
-
-                JediTerminal jediTermWidget = (JediTerminal) widgetToUse.getTerminal();
-                if (jediTermWidget == null) {
-                    LOG.error("Could not get JediTermWidget from ShellTerminalWidget for tab: " + tabName);
-                    Messages.showErrorDialog(project, "Internal error: Could not access terminal internals for tab '" + tabName + "'.", "Terminal Error");
-                    return;
-                }
-                final TerminalTextBuffer textBuffer = jediTermWidget.getTerminalTextBuffer();
-
-                // This disposable will manage the lifecycle of the TextBufferChangesListener
-                final Disposable changesListenerDisposable = Disposer.newDisposable("TextBufferChangesListenerDisposable_" + uniqueMarker);
-
-                final TerminalModelListener listener = () -> {
-                    var c = textBuffer.getLine(0).getText();
-                    var line = textBuffer.getScreenLinesStorage();
-                    var c1 = line.get(0).getText();
-                    var commandList = originalCommand.split(" ");
-                     var c11 = commandList[commandList.length - 1];
-                    if (!endCommandLine.get())
-                    {
-                        line.get(0).deleteCharacters(0);
-                    }
-                    if (c1.contains(c11))
-                    {
-                        endCommandLine.set(true);
-                        line.get(0).deleteCharacters(0);
-                    }
-
-                };
-
+            ApplicationManager.getApplication().invokeLater(() -> {
+                String uniqueTabName = tabNamePrefix + " " + UUID.randomUUID().toString().substring(0, 6);
                 try {
-                    textBuffer.addModelListener(listener);
-                    LOG.info("TextBufferChangesListener added for tab: " + tabName);
+                    // 1. 准备 PTY 进程的环境变量
+                    Map<String, String> effectiveEnv = new HashMap<>(System.getenv());
+                    effectiveEnv.putAll(customEnvVars);
+                    effectiveEnv.put("TERM", "xterm-256color"); // 对 ANSI 颜色至关重要
+                    effectiveEnv.put("PYTHONUNBUFFERED", "1");    // 建议 Python 实时输出
+                    effectiveEnv.put("PYTHONIOENCODING", "UTF-8"); // 确保 UTF-8 I/O
+                    effectiveEnv.put("LANG", "en_US.UTF-8");
+                    effectiveEnv.put("LC_ALL", "en_US.UTF-8");
+                    // 2. 准备 PTY 进程的命令
+                    List<String> commandList = new ArrayList<>();
+                    commandList.add(pythonExecutable);
+                    commandList.add(scriptPath);
+                    commandList.addAll(scriptArguments); // 添加脚本参数
+                    String[] command = commandList.toArray(new String[0]);
 
-                    Disposer.register(changesListenerDisposable, () -> {
-                        if (textBuffer != null) { // Check if textBuffer is still valid
-                            textBuffer.removeModelListener(listener);
-                            LOG.info("TextBufferChangesListener removed for tab '" + tabName + "' via Disposer.");
-                        }
-                    });
+                    // 3. 创建 PtyProcess
+                    // 确保工作目录是项目根目录或脚本所在目录，根据需求调整
+                    String workDir = project.getBasePath() != null ? project.getBasePath() : new java.io.File(scriptPath).getParent();
+                    PtyProcessBuilder ptyProcessBuilder = new PtyProcessBuilder(command)
+                            .setEnvironment(effectiveEnv)
+                            .setDirectory(workDir)
+                            .setInitialColumns(INIT_COLUMNS)
+                            .setInitialRows(INIT_ROWS)
+                            .setWindowsAnsiColorEnabled(true)
+                            .setUseWinConPty(true)
+                            ;
 
-                    LOG.info("Executing final command in tab '" + tabName + "': " + originalCommand);
-                    widgetToUse.executeCommand(originalCommand);
+                    LOG.info("Starting PTY process with command: " + String.join(" ", commandList) +
+                            ", environment keys: " + effectiveEnv.keySet());
 
-                } catch (IOException e) {
-                    LOG.error("IOException sending command to terminal for tab '" + tabName + "': " + originalCommand, e);
-                    Messages.showErrorDialog(project, "Error sending command to terminal (IO) for tab '" + tabName + "': " + e.getMessage(), "Terminal Error");
-                    Disposer.dispose(changesListenerDisposable);
-                } catch (Exception e) {
-                    LOG.error("Error during terminal command execution or listener setup for tab '" + tabName + "': " + originalCommand, e);
-                    Messages.showErrorDialog(project, "Error processing command for tab '" + tabName + "': " + e.getMessage(), "Terminal Error");
-                    Disposer.dispose(changesListenerDisposable);
+                    PtyProcess ptyProcess = ptyProcessBuilder.start();
+
+                    // 4. 创建 TtyConnector
+                    TtyConnector ttyConnector = new PtyProcessTtyConnector(ptyProcess, StandardCharsets.UTF_8);
+                    TtyConnector loggingTtyConnector = new LoggingTtyConnectorWrapper(ttyConnector);
+                    // 5. 创建 JediTermWidget (UI 组件)
+                    Disposable contentDisposable = Disposer.newDisposable("JediTermContentDisposable_" + uniqueTabName);
+                    String desiredFontName = "等距更纱黑体 SC";
+                    int fontSize = 14;
+                    SettingsProvider myFontProvider = new TerminalFontSettingsProvider(desiredFontName, Font.PLAIN, fontSize);
+                    JBTerminalSystemSettingsProvider settingsProvider = new JBTerminalSystemSettingsProvider();
+                    JediTermWidget jediTermWidget = new JediTermWidget(INIT_COLUMNS,INIT_ROWS, myFontProvider);
+
+
+                    // 6. 创建终端会话并启动
+                    TerminalSession session = jediTermWidget.createTerminalSession(ttyConnector);
+                    if (session instanceof com.jediterm.terminal.ui.TerminalSession && session == jediTermWidget) {
+                        LOG.info("Confirmed: session object is indeed the jediTermWidget instance and implements TerminalSession.");
+                    } else {
+                        LOG.error("Error: session object is NOT the jediTermWidget or does not implement TerminalSession as expected!");
+                        // 如果这里出错，说明我对你提供的 createTerminalSession 的理解或你的代码有出入
+                        return; // 无法继续
+                    }
+                    final com.jediterm.terminal.Terminal emulatorTerminal = session.getTerminal(); // 获取 Terminal 接口实例
+
+                    if (emulatorTerminal != null) {
+                        ApplicationManager.getApplication().invokeLater(() -> { // 确保在 UI 线程操作，如果 setEnabled 会触发UI
+                            try {
+                                LOG.info("Attempting to explicitly disable AlternateBuffer mode via Terminal interface.");
+                                // 调用 TerminalMode 的 setEnabled，传入获取到的 Terminal 实例
+                                com.jediterm.terminal.TerminalMode.AlternateBuffer.setEnabled(emulatorTerminal, false);
+                                LOG.info("AlternateBuffer mode explicitly set to false.");
+
+                                // （可选）同时确保光标可见，以防万一
+                                // com.jediterm.terminal.TerminalMode.CursorVisible.setEnabled(emulatorTerminal, true);
+
+                            } catch (Exception e) {
+                                LOG.error("Exception while trying to set AlternateBuffer mode.", e);
+                            }
+                        });
+                    } else {
+                        LOG.warn("Could not get Terminal interface from session (jediTermWidget) to set mode.");
+                    }
+                    session.start();
+                    final ToolWindow terminalToolWindow = ToolWindowManager.getInstance(project).getToolWindow(TerminalToolWindowFactory.TOOL_WINDOW_ID);
+                    if (terminalToolWindow == null) {
+                        LOG.error("Terminal tool window not found for PTY tab.");
+                        Messages.showErrorDialog(project, "Terminal tool window is not available.", "Terminal Error");
+                        Disposer.dispose(contentDisposable); // 清理
+                        if (ptyProcess.isAlive()) ptyProcess.destroy(); // 确保进程被杀死
+                        return;
+                    }
+
+                    ContentFactory contentFactory = ContentFactory.getInstance();
+                    Content content = contentFactory.createContent(jediTermWidget.getComponent(), uniqueTabName, true);
+                    content.setDisposer(contentDisposable); // 当标签页关闭时，jediTermWidget 和 PTY 进程会被清理
+
+                    terminalToolWindow.getContentManager().addContent(content);
+                    terminalToolWindow.getContentManager().setSelectedContent(content);
+                    terminalToolWindow.show(); // 确保工具窗口可见
+
+                    LOG.info("Dedicated PTY session '" + uniqueTabName + "' started for script: " + scriptPath);
+
+                } catch (IOException e) { // PtyProcessBuilder.start() 可能抛出 ExecutionException
+                    LOG.error("Failed to start PTY process for script: " + scriptPath);
+                    Messages.showErrorDialog(project, "Failed to start PTY process: " + e.getMessage(), "Terminal Error");
+                } catch (Exception e) { // 捕获其他意外错误
+                    LOG.error("An unexpected error occurred while setting up PTY for script: " + scriptPath, e);
+                    Messages.showErrorDialog(project, "Unexpected error setting up PTY: " + e.getMessage(), "Terminal Error");
                 }
             });
-        });
-    }
+        }
     @Nullable
     public ShellTerminalWidget findOrCreateTerminalWidget(@NotNull Project project,
                                                           @NotNull TerminalType terminalType,
