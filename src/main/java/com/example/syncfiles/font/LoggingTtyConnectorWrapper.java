@@ -6,7 +6,6 @@ import org.jetbrains.annotations.NotNull;
 import org.slf4j.Logger;
 import org.slf4j.LoggerFactory;
 
-import java.awt.Dimension; // 尽管resize(Dimension)已废弃，但接口仍有它
 import java.io.IOException;
 
 public class LoggingTtyConnectorWrapper implements TtyConnector {
@@ -70,15 +69,6 @@ public class LoggingTtyConnectorWrapper implements TtyConnector {
     @Override public void close() { LOG.info("LTCW.close() called."); delegate.close(); }
     @Override public void resize(@NotNull TermSize termSize) { delegate.resize(termSize); }
 
-    /** @deprecated */
-    @Deprecated
-    @Override
-    public void resize(@NotNull Dimension termWinSize) { delegate.resize(termWinSize); }
-
-    /** @deprecated */
-    @Deprecated
-    @Override
-    public void resize(Dimension termWinSize, Dimension pixelSize) { delegate.resize(termWinSize, pixelSize); }
 
 
 
