@@ -1,6 +1,7 @@
 package com.example.syncfiles;
 
 import com.example.syncfiles.notifiers.FileDownloadFinishedNotifier;
+import com.example.syncfiles.util.Util;
 import com.intellij.openapi.actionSystem.*;
 import com.intellij.openapi.progress.ProgressIndicator;
 import com.intellij.openapi.progress.ProgressManager;
@@ -20,7 +21,6 @@ import java.nio.file.*;
 import java.util.Arrays;
 import java.util.Comparator;
 import java.util.List;
-import java.util.Objects;
 import java.util.stream.Stream;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipInputStream;

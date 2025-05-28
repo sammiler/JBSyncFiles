@@ -1,7 +1,7 @@
 <idea-plugin>
     <id>syncfiles</id> <!-- 您的插件ID -->
     <name>SyncFiles</name> <!-- 您的插件名称 -->
-    <version>4.2.0</version> <!-- 新版本号 -->
+    <version>4.3.0</version> <!-- 新版本号 -->
     <vendor email="sammilergood@gmail.com" url="https://cplusplusbug.org">sammiler</vendor>
 
     <description><![CDATA[
@@ -43,6 +43,22 @@
     ]]></description>
 
     <change-notes><![CDATA[
+<b>Version 4.3.0</b>
+<ul>
+    <li><b>Smart Terminal Upgrades:</b> Revamped terminal for a smoother, more personalized experience.
+        <ul>
+            <li><b>Customizable Terminal Font:</b>
+                <ul>
+                    <li>Added "Select Terminal Font" action to choose your preferred font.</li>
+                    <li>Intelligently auto-selects a good CJK-friendly monospaced font (like "Sarasa Mono SC") if available, with graceful fallbacks.</li>
+                    <li>Your font choice is saved and remembered.</li>
+                </ul>
+            </li>
+            <li><b>Enhanced Windows PTY & ANSI Support:</b> Improved display consistency and color rendering, especially on Windows.</li>
+        </ul>
+    </li>
+    <li>Other minor fixes and improvements.</li>
+</ul>
     <b>Version 4.2.0</b>
     <ul>
     <li>Added a Smart Action button to quickly and intelligently load plugin state/configuration</li>

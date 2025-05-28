@@ -1,5 +1,6 @@
 package com.example.syncfiles;
 
+import com.example.syncfiles.util.Util;
 import com.intellij.openapi.diagnostic.Logger; // 使用 Logger
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.startup.ProjectActivity; // 或 StartupActivity，取决于您的 IDEA 版本和声明方式

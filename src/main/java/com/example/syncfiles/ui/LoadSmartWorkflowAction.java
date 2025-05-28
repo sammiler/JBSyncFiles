@@ -1,7 +1,6 @@
 // File: LoadSmartWorkflowAction.java
-package com.example.syncfiles; // 或者你的包名
+package com.example.syncfiles.ui; // 或者你的包名
 
-import com.example.syncfiles.config.smartworkflow.SmartWorkflowRootConfig;
 import com.example.syncfiles.logic.SmartWorkflowService; // 将创建的服务类
 import com.intellij.icons.AllIcons;
 import com.intellij.openapi.actionSystem.AnAction;
@@ -16,9 +15,6 @@ import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.IconLoader;
 import com.intellij.openapi.util.text.StringUtil;
 import org.jetbrains.annotations.NotNull;
-import org.yaml.snakeyaml.LoaderOptions;
-import org.yaml.snakeyaml.Yaml;
-import org.yaml.snakeyaml.constructor.Constructor;
 
 import javax.swing.*;
 import java.io.IOException;
@@ -33,7 +29,7 @@ import java.util.Scanner;
 public class LoadSmartWorkflowAction extends AnAction {
 
     private static final String DEFAULT_YAML_URL = "https://raw.githubusercontent.com/sammiler/CodeConf/refs/heads/main/Cpp/SyncFiles/Clion/workflow.yaml"; // <<< 替换这个
-    private static final Icon CUSTOM_WORKFLOW_ICON = IconLoader.getIcon("/icons/automatic.svg", LoadSmartWorkflowAction.class);
+    private static final Icon CUSTOM_WORKFLOW_ICON = IconLoader.getIcon("/icons/artificial.svg", LoadSmartWorkflowAction.class);
     public LoadSmartWorkflowAction() {
         super("Load Smart Workflow...", "Load and apply configuration from a YAML URL", CUSTOM_WORKFLOW_ICON);
     }

@@ -1,5 +1,6 @@
-package com.example.syncfiles;
+package com.example.syncfiles.util;
 
+import com.example.syncfiles.SyncFilesConfig;
 import com.intellij.openapi.components.PathMacroManager;
 import com.intellij.openapi.project.Project;
 // No JDOMUtil needed if using SAXBuilder directly for Document
@@ -9,13 +10,10 @@ import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.vfs.VirtualFileManager;
 import com.intellij.util.xmlb.XmlSerializer;
-import org.jdom.Document;
 import org.jdom.Element;
-import org.jdom.input.SAXBuilder; // Import SAXBuilder
 import org.jetbrains.annotations.NotNull;
 
 import java.io.InputStream;
-import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import com.intellij.openapi.application.ApplicationManager; // Needed for invokeLater

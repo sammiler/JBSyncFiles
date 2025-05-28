@@ -1,6 +1,7 @@
 package com.example.syncfiles;
 
 import com.example.syncfiles.notifiers.FilesChangeNotifier;
+import com.example.syncfiles.util.Util;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;

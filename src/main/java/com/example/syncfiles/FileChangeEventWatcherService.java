@@ -2,6 +2,7 @@ package com.example.syncfiles;
 
 import com.example.syncfiles.notifiers.FilesChangeNotifier;
 import com.example.syncfiles.notifiers.SyncFilesNotifier;
+import com.example.syncfiles.util.Util;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
@@ -24,7 +25,7 @@ import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 
-import static com.example.syncfiles.Util.normalizePath; // 假设 Util.normalizePath 存在且工作正常
+import static com.example.syncfiles.util.Util.normalizePath; // 假设 Util.normalizePath 存在且工作正常
 
 public class FileChangeEventWatcherService implements Disposable {
     private static final Logger LOG = Logger.getInstance(FileChangeEventWatcherService.class);

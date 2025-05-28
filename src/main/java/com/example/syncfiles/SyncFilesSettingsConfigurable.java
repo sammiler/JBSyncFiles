@@ -1,6 +1,7 @@
 package com.example.syncfiles;
 
 import com.example.syncfiles.notifiers.SyncFilesNotifier;
+import com.example.syncfiles.util.Util;
 import com.intellij.openapi.fileChooser.FileChooser;
 import com.intellij.openapi.fileChooser.FileChooserDescriptor;
 import com.intellij.openapi.fileChooser.FileChooserDescriptorFactory;

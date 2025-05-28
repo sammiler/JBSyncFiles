@@ -1,8 +1,12 @@
 package com.example.syncfiles;
 
+import com.example.syncfiles.action.FontSelectorAction;
 import com.example.syncfiles.font.LoggingTtyConnectorWrapper;
 import com.example.syncfiles.font.TerminalFontSettingsProvider;
+import com.example.syncfiles.util.TerminalFontUtil;
 import com.example.syncfiles.notifiers.SyncFilesNotifier;
+import com.example.syncfiles.ui.LoadSmartWorkflowAction;
+import com.example.syncfiles.util.Util;
 import com.intellij.icons.AllIcons;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.actionSystem.*;
@@ -21,26 +25,22 @@ import com.intellij.openapi.ui.ComboBox;
 import com.intellij.openapi.ui.DialogWrapper;
 import com.intellij.openapi.ui.Messages;
 import com.intellij.openapi.util.Disposer;
-import com.intellij.openapi.util.SystemInfo;
+import com.intellij.openapi.util.IconLoader;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.openapi.vfs.LocalFileSystem;
 import com.intellij.openapi.vfs.VirtualFile;
 import com.intellij.openapi.wm.ToolWindow;
 import com.intellij.openapi.wm.ToolWindowManager;
-import com.intellij.terminal.JBTerminalWidget;
 import com.intellij.terminal.pty.PtyProcessTtyConnector;
-import com.intellij.terminal.ui.TerminalWidget;
 import com.intellij.ui.*;
 import com.intellij.ui.content.Content;
 import com.intellij.ui.content.ContentFactory;
-import com.intellij.ui.content.ContentManager;
 import com.jediterm.terminal.TtyConnector;
 import com.jediterm.terminal.ui.JediTermWidget;
 import com.jediterm.terminal.ui.TerminalSession;
 import com.jediterm.terminal.ui.settings.SettingsProvider;
 import com.pty4j.PtyProcess;
 import com.pty4j.PtyProcessBuilder;
-import org.jetbrains.annotations.Nls;
 import org.jetbrains.plugins.terminal.*;
 import com.intellij.ui.components.JBLabel;
 import com.intellij.ui.components.JBScrollPane;
@@ -50,7 +50,6 @@ import com.intellij.util.ui.JBUI;
 import com.intellij.util.ui.tree.TreeUtil;
 import org.jetbrains.annotations.NotNull;
 import org.jetbrains.annotations.Nullable;
-import org.jetbrains.plugins.terminal.ShellTerminalWidget;
 // 核心 Terminal API
 import javax.swing.*;
 import javax.swing.tree.*;
@@ -67,6 +66,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicInteger;
 import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
@@ -76,15 +76,13 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
     private DefaultTreeModel treeModel;
     private DefaultMutableTreeNode rootNode;
     private Project project; // 当前 Project
-    private final Map<ShellTerminalWidget,TerminalType> terminalTypeMap = new HashMap<>();
+    private  String TAB_NAME = "Sync Files";
     private final int INIT_COLUMNS = 120;
     private final int INIT_ROWS     = 40;
-    enum TerminalType
-    {
-        POWERSHELL,
-        CMD,
-        BASH
-    }
+    private final int FONT_SIZE     = 40;
+    public static final Icon ACTION_ADD = IconLoader.getIcon("/icons/add.svg", FontSelectorAction.class);
+    public static final Icon ACTION_DOWNLOAD = IconLoader.getIcon("/icons/download.svg", FontSelectorAction.class);
+    public static final Icon ACTION_REFRESH = IconLoader.getIcon("/icons/refresh.svg", FontSelectorAction.class);
     @Override
     public void createToolWindowContent(@NotNull Project project, @NotNull ToolWindow toolWindow) {
         this.project = project;
@@ -93,7 +91,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
         // 1. 工具栏 (ActionToolbar)
         ActionManager actionManager = ActionManager.getInstance();
         DefaultActionGroup actionGroup = new DefaultActionGroup();
-        actionGroup.add(new AnAction("Refresh Scripts And Work Directory", "Reload scripts from disk and configuration", AllIcons.Actions.Refresh) {
+        actionGroup.add(new AnAction("Refresh Scripts And Work Directory", "Reload scripts from disk and configuration", ACTION_REFRESH) {
             @Override
             public void actionPerformed(@NotNull AnActionEvent e) {
                 updateScriptTree(true); // true 表示强制从磁盘扫描
@@ -104,7 +102,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
                 return ActionUpdateThread.BGT;
             }
         });
-        actionGroup.add(new AnAction("Add Group...", "Add a new script group", AllIcons.General.Add) {
+        actionGroup.add(new AnAction("Add Group...", "Add a new script group", ACTION_ADD) {
             @Override
             public void actionPerformed(@NotNull AnActionEvent e) {
                 addNewScriptGroup();
@@ -115,7 +113,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
             }
         });
         actionGroup.add(new Separator());
-        actionGroup.add(new AnAction("Sync GitHub Files", "Download files/directories based on mappings", AllIcons.Actions.Download) {
+        actionGroup.add(new AnAction("Sync GitHub Files", "Download files/directories based on mappings", ACTION_DOWNLOAD) {
             @Override
             public void actionPerformed(@NotNull AnActionEvent e) {
                 new SyncAction().syncFiles(project); // SyncAction 是您原有的类
@@ -127,7 +125,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
         });
         actionGroup.add(new Separator());
         actionGroup.add(new LoadSmartWorkflowAction());
-
+        actionGroup.add(new FontSelectorAction());
 
         ActionToolbar toolbar = actionManager.createActionToolbar("SyncFilesToolbar", actionGroup, true);
         toolbar.setTargetComponent(mainPanel);
@@ -217,7 +215,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
 
         if ("terminal".equalsIgnoreCase(scriptEntry.executionMode)) {
 //            executeScriptInTerminal(project, pythonExecutable, fullScriptPath.toString(), config.getEnvVariables());
-            executeScriptInDedicatedPtyTab(project,pythonExecutable,fullScriptPath.toString(),new ArrayList<>(),config.getEnvVariables(),"SyncFiles");
+            executeScriptInDedicatedPtyTab(project,pythonExecutable,fullScriptPath.toString(),new ArrayList<>(),config.getEnvVariables(), TAB_NAME);
         } else { // directApi 或其他 (默认为 directApi)
             executeScriptDirectly(project, pythonExecutable, fullScriptPath.toString(), config.getEnvVariables(), scriptEntry.getDisplayName());
         }
@@ -815,7 +813,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
             Util.forceRefreshVFS(scriptPath); // 确保文件已同步 (如果需要)
 
             ApplicationManager.getApplication().invokeLater(() -> {
-                String uniqueTabName = tabNamePrefix + " " + UUID.randomUUID().toString().substring(0, 6);
+                String uniqueTabName = TAB_NAME;
                 try {
                     // 1. 准备 PTY 进程的环境变量
                     Map<String, String> effectiveEnv = new HashMap<>(System.getenv());
@@ -854,10 +852,7 @@ public class SyncFilesToolWindowFactory implements com.intellij.openapi.wm.ToolW
                     TtyConnector loggingTtyConnector = new LoggingTtyConnectorWrapper(ttyConnector);
                     // 5. 创建 JediTermWidget (UI 组件)
                     Disposable contentDisposable = Disposer.newDisposable("JediTermContentDisposable_" + uniqueTabName);
-                    String desiredFontName = "等距更纱黑体 SC";
-                    int fontSize = 14;
-                    SettingsProvider myFontProvider = new TerminalFontSettingsProvider(desiredFontName, Font.PLAIN, fontSize);
-                    JBTerminalSystemSettingsProvider settingsProvider = new JBTerminalSystemSettingsProvider();
+                    SettingsProvider myFontProvider = new TerminalFontSettingsProvider(TerminalFontUtil.getConfiguredFont().getFontName(), Font.PLAIN, FONT_SIZE);
                     JediTermWidget jediTermWidget = new JediTermWidget(INIT_COLUMNS,INIT_ROWS, myFontProvider);
 
 

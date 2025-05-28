@@ -7,12 +7,12 @@ import com.example.syncfiles.config.smartworkflow.SmartWatchEntry;
 import com.example.syncfiles.config.smartworkflow.SmartWorkflowRootConfig;
 import com.example.syncfiles.notifiers.FileDownloadFinishedNotifier; // 你的下载完成通知接口
 import com.example.syncfiles.notifiers.SyncFilesNotifier;
+import com.example.syncfiles.util.Util;
 import com.intellij.openapi.Disposable;
 import com.intellij.openapi.application.ApplicationManager;
 import com.intellij.openapi.diagnostic.Logger;
 import com.intellij.openapi.project.Project;
 import com.intellij.openapi.ui.Messages;
-import com.intellij.openapi.util.Disposer;
 import com.intellij.openapi.util.SystemInfo;
 import com.intellij.openapi.util.text.StringUtil;
 import com.intellij.util.messages.MessageBusConnection;
@@ -29,7 +29,6 @@ import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
-import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 public class SmartWorkflowService implements Disposable { // 实现 Disposable
